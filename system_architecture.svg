@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="1200" height="800" viewBox="0 0 1200 800" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style type="text/css"><![CDATA[
+      .title { font: 700 24px 'Arial', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .subtitle { font: 600 16px 'Arial', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .label { font: 500 14px 'Arial', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .small { font: 500 12px 'Arial', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #334155; }
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 1.5; rx: 8; ry: 8; }
+      .box-accent { fill: #eef2ff; stroke: #4f46e5; stroke-width: 1.5; rx: 8; ry: 8; }
+      .box-secondary { fill: #ecfeff; stroke: #0891b2; stroke-width: 1.5; rx: 8; ry: 8; }
+      .box-optional { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; rx: 8; ry: 8; stroke-dasharray: 6 5; }
+      .storage { fill: #fefce8; stroke: #ca8a04; stroke-width: 1.5; rx: 8; ry: 8; }
+      .arrow { stroke: #0f766e; stroke-width: 2; marker-end: url(#arrowhead); fill: none; }
+      .arrow2 { stroke: #334155; stroke-width: 1.8; marker-end: url(#arrowhead2); fill: none; }
+      .dashed { stroke-dasharray: 6 6; }
+      .legend-line { stroke-width: 2; }
+    ]]></style>
+
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0f766e" />
+    </marker>
+    <marker id="arrowhead2" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="32" y="48" class="title">SOP 智能问答系统 - 整体架构图</text>
+  <text x="32" y="74" class="small">端到端：上传/解析/向量化/检索增强生成（RAG）/引用/运维</text>
+
+  <!-- User / Client -->
+  <rect x="40" y="120" width="150" height="70" class="box" />
+  <text x="55" y="152" class="subtitle">用户/客户端</text>
+  <text x="55" y="172" class="small">浏览器/内网终端</text>
+
+  <!-- Frontend -->
+  <rect x="220" y="110" width="220" height="90" class="box-accent" />
+  <text x="235" y="142" class="subtitle">前端 (React + Vite)</text>
+  <text x="235" y="162" class="small">上传/提问 UI · 调试端口 3001</text>
+
+  <!-- Nginx (Prod) -->
+  <rect x="470" y="110" width="120" height="90" class="box-optional" />
+  <text x="480" y="142" class="subtitle">Nginx</text>
+  <text x="480" y="162" class="small">生产反向代理/静态服务</text>
+
+  <!-- Backend -->
+  <rect x="620" y="80" width="520" height="150" class="box" />
+  <text x="635" y="105" class="subtitle">后端 API (FastAPI + Uvicorn)</text>
+  <text x="635" y="125" class="small">/sop-qa-system/backend/app · Swagger: /docs</text>
+  <rect x="630" y="135" width="240" height="80" class="box-secondary" />
+  <text x="642" y="160" class="label">上传与索引 API</text>
+  <text x="642" y="180" class="small">文件接收 · 触发解析与向量化</text>
+  <rect x="890" y="135" width="240" height="80" class="box-secondary" />
+  <text x="902" y="160" class="label">问答/检索 API</text>
+  <text x="902" y="180" class="small">RAG 编排 · 返回答案与引用</text>
+
+  <!-- LangChain RAG Block -->
+  <rect x="220" y="240" width="920" height="240" class="box" />
+  <text x="235" y="265" class="subtitle">LangChain RAG 处理管线</text>
+
+  <!-- Document Processor -->
+  <rect x="235" y="290" width="260" height="80" class="box" />
+  <text x="248" y="315" class="label">文档处理器 (Pandas/解析/分块)</text>
+  <text x="248" y="337" class="small">PDF/Word/TXT/Markdown/Excel · 大表分批/概览</text>
+
+  <!-- Embeddings -->
+  <rect x="520" y="290" width="240" height="80" class="box" />
+  <text x="533" y="315" class="label">嵌入模型 (Embeddings)</text>
+  <text x="533" y="337" class="small">OpenAI / Qwen / DeepSeek 可切换</text>
+
+  <!-- Vector Store -->
+  <rect x="785" y="290" width="165" height="80" class="storage" />
+  <text x="797" y="315" class="label">向量存储 (FAISS)</text>
+  <text x="797" y="337" class="small">开发/本地索引</text>
+
+  <!-- Vector Store Optional: Milvus -->
+  <rect x="960" y="290" width="165" height="80" class="box-optional" />
+  <text x="972" y="315" class="label">可选：Milvus</text>
+  <text x="972" y="337" class="small">生产级分布式</text>
+
+  <!-- Retriever -->
+  <rect x="520" y="380" width="240" height="80" class="box" />
+  <text x="533" y="405" class="label">检索器 (Similarity Search)</text>
+  <text x="533" y="427" class="small">从向量库召回相关分块</text>
+
+  <!-- Re-ranker Optional -->
+  <rect x="785" y="380" width="165" height="80" class="box-optional" />
+  <text x="797" y="405" class="label">可选：重排</text>
+  <text x="797" y="427" class="small">BGE Cross-Encoder</text>
+
+  <!-- LLM Generator -->
+  <rect x="960" y="380" width="165" height="80" class="box" />
+  <text x="972" y="405" class="label">生成模型 (LLM)</text>
+  <text x="972" y="427" class="small">上下文生成答案 + 引用</text>
+
+  <!-- Data Storage -->
+  <rect x="40" y="520" width="360" height="120" class="box" />
+  <text x="55" y="545" class="subtitle">数据与目录</text>
+  <rect x="55" y="560" width="160" height="65" class="storage" />
+  <text x="65" y="585" class="label">documents/</text>
+  <text x="65" y="605" class="small">原始文档</text>
+  <rect x="230" y="560" width="160" height="65" class="storage" />
+  <text x="240" y="585" class="label">vectors/</text>
+  <text x="240" y="605" class="small">向量索引</text>
+
+  <!-- Ops / Deploy -->
+  <rect x="420" y="520" width="360" height="120" class="box" />
+  <text x="435" y="545" class="subtitle">部署与运维</text>
+  <text x="435" y="569" class="small">Docker / Docker Compose / Kubernetes</text>
+  <text x="435" y="591" class="small">监控：Prometheus + Grafana</text>
+  <text x="435" y="613" class="small">Nginx 证书/反向代理（生产）</text>
+
+  <!-- RBAC / DB (Planned) -->
+  <rect x="800" y="520" width="340" height="120" class="box-optional" />
+  <text x="815" y="545" class="subtitle">规划：权限与数据层</text>
+  <text x="815" y="569" class="small">PostgreSQL（用户/日志/权限）</text>
+  <text x="815" y="591" class="small">Redis（缓存/会话）</text>
+  <text x="815" y="613" class="small">审计与统计（命中率、查询日志）</text>
+
+  <!-- External Providers -->
+  <rect x="960" y="670" width="165" height="70" class="box" />
+  <text x="972" y="695" class="label">外部模型/服务</text>
+  <text x="972" y="717" class="small">OpenAI / DeepSeek / Qwen</text>
+
+  <!-- Flows: Upload Path -->
+  <path class="arrow" d="M190,155 L220,155" />
+  <path class="arrow" d="M440,155 L470,155" />
+  <path class="arrow" d="M590,155 L620,155" />
+  <path class="arrow" d="M750,175 L750,240" />
+  <path class="arrow" d="M365,330 L520,330" />
+  <path class="arrow" d="M760,330 L785,330" />
+  
+  <!-- Flows: Data writes/reads -->
+  <path class="arrow2 dashed" d="M315,595 L315,370 L235,370" />
+  <text x="190" y="365" class="small">原文输入</text>
+  <path class="arrow2 dashed" d="M310,595 L310,640 L310,640" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  <path class="arrow2 dashed" d="M310,595 L310,595" />
+  
+  <path class="arrow2 dashed" d="M310,595 C500,595 850,330 850,330" />
+  <text x="710" y="320" class="small">向量写入</text>
+
+  <!-- Flows: Query Path -->
+  <path class="arrow" d="M190,165 L220,165" />
+  <path class="arrow" d="M440,165 L470,165" />
+  <path class="arrow" d="M590,165 L620,165" />
+  <path class="arrow" d="M1010,215 L1010,380" />
+  <path class="arrow" d="M760,420 L785,420" />
+  <path class="arrow" d="M950,420 L960,420" />
+  <path class="arrow" d="M1125,420 C1160,420 1160,180 1125,180 L1138,180" />
+
+  <!-- Return Answer to Frontend -->
+  <path class="arrow" d="M1045,380 C1045,250 420,250 420,155 L440,155" />
+  <text x="900" y="255" class="small">答案 + 引用</text>
+
+  <!-- Legend -->
+  <rect x="40" y="700" width="520" height="70" class="box" />
+  <text x="55" y="725" class="subtitle">图例</text>
+  <line x1="120" y1="740" x2="180" y2="740" class="arrow legend-line" />
+  <text x="190" y="745" class="small">请求/处理流程</text>
+  <line x1="330" y1="740" x2="390" y2="740" class="arrow2 dashed legend-line" />
+  <text x="400" y="745" class="small">数据写入/读取/可选组件</text>
+
+  <!-- Notes -->
+  <text x="600" y="740" class="small">注：虚线框/连线表示规划或可选组件；Nginx用于生产环境反代</text>
+</svg>

@@ -1,0 +1,211 @@
+<svg width="1200" height="1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; fill: #2c3e50; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #34495e; }
+      .text { font-family: Arial, sans-serif; font-size: 12px; fill: #2c3e50; }
+      .small-text { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .process-box { fill: #3498db; stroke: #2980b9; stroke-width: 2; rx: 8; }
+      .storage-box { fill: #e74c3c; stroke: #c0392b; stroke-width: 2; rx: 8; }
+      .service-box { fill: #2ecc71; stroke: #27ae60; stroke-width: 2; rx: 8; }
+      .user-box { fill: #f39c12; stroke: #e67e22; stroke-width: 2; rx: 8; }
+      .decision-box { fill: #9b59b6; stroke: #8e44ad; stroke-width: 2; rx: 8; }
+      .arrow { stroke: #34495e; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .data-flow { stroke: #e67e22; stroke-width: 2; fill: none; marker-end: url(#arrowhead); stroke-dasharray: 5,5; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34495e" />
+    </marker>
+  </defs>
+  
+  <!-- 标题 -->
+  <text x="600" y="30" text-anchor="middle" class="title">SOP智能问答系统 - 数据处理流程图</text>
+  
+  <!-- 用户层 -->
+  <text x="100" y="70" class="subtitle">用户层</text>
+  <rect x="50" y="80" width="120" height="60" class="user-box"/>
+  <text x="110" y="105" text-anchor="middle" class="text" fill="white">前端用户界面</text>
+  <text x="110" y="120" text-anchor="middle" class="small-text" fill="white">React + TypeScript</text>
+  
+  <!-- 文档上传流程 -->
+  <text x="300" y="70" class="subtitle">文档处理流程</text>
+  
+  <!-- 1. 文档上传 -->
+  <rect x="250" y="80" width="120" height="60" class="process-box"/>
+  <text x="310" y="105" text-anchor="middle" class="text" fill="white">1. 文档上传</text>
+  <text x="310" y="120" text-anchor="middle" class="small-text" fill="white">PDF/Word/TXT</text>
+  
+  <!-- 2. 文档解析 -->
+  <rect x="250" y="180" width="120" height="60" class="process-box"/>
+  <text x="310" y="205" text-anchor="middle" class="text" fill="white">2. 文档解析</text>
+  <text x="310" y="220" text-anchor="middle" class="small-text" fill="white">DocumentProcessor</text>
+  
+  <!-- 3. 文本分割 -->
+  <rect x="250" y="280" width="120" height="60" class="process-box"/>
+  <text x="310" y="305" text-anchor="middle" class="text" fill="white">3. 文本分割</text>
+  <text x="310" y="320" text-anchor="middle" class="small-text" fill="white">RecursiveTextSplitter</text>
+  
+  <!-- 4. 向量化 -->
+  <rect x="250" y="380" width="120" height="60" class="process-box"/>
+  <text x="310" y="405" text-anchor="middle" class="text" fill="white">4. 向量化</text>
+  <text x="310" y="420" text-anchor="middle" class="small-text" fill="white">Embedding Model</text>
+  
+  <!-- 数据存储层 -->
+  <text x="500" y="70" class="subtitle">数据存储层</text>
+  
+  <!-- PostgreSQL -->
+  <rect x="450" y="120" width="120" height="60" class="storage-box"/>
+  <text x="510" y="145" text-anchor="middle" class="text" fill="white">PostgreSQL</text>
+  <text x="510" y="160" text-anchor="middle" class="small-text" fill="white">文档元数据</text>
+  
+  <!-- FAISS向量库 -->
+  <rect x="450" y="220" width="120" height="60" class="storage-box"/>
+  <text x="510" y="245" text-anchor="middle" class="text" fill="white">FAISS向量库</text>
+  <text x="510" y="260" text-anchor="middle" class="small-text" fill="white">向量索引</text>
+  
+  <!-- Redis缓存 -->
+  <rect x="450" y="320" width="120" height="60" class="storage-box"/>
+  <text x="510" y="345" text-anchor="middle" class="text" fill="white">Redis缓存</text>
+  <text x="510" y="360" text-anchor="middle" class="small-text" fill="white">问答结果缓存</text>
+  
+  <!-- 问答处理流程 -->
+  <text x="700" y="70" class="subtitle">问答处理流程</text>
+  
+  <!-- 5. 用户提问 -->
+  <rect x="650" y="80" width="120" height="60" class="user-box"/>
+  <text x="710" y="105" text-anchor="middle" class="text" fill="white">5. 用户提问</text>
+  <text x="710" y="120" text-anchor="middle" class="small-text" fill="white">自然语言输入</text>
+  
+  <!-- 6. 问题预处理 -->
+  <rect x="650" y="180" width="120" height="60" class="process-box"/>
+  <text x="710" y="205" text-anchor="middle" class="text" fill="white">6. 问题预处理</text>
+  <text x="710" y="220" text-anchor="middle" class="small-text" fill="white">查询增强</text>
+  
+  <!-- 7. 向量检索 -->
+  <rect x="650" y="280" width="120" height="60" class="service-box"/>
+  <text x="710" y="305" text-anchor="middle" class="text" fill="white">7. 向量检索</text>
+  <text x="710" y="320" text-anchor="middle" class="small-text" fill="white">相似度搜索</text>
+  
+  <!-- 8. LLM生成答案 -->
+  <rect x="650" y="380" width="120" height="60" class="service-box"/>
+  <text x="710" y="405" text-anchor="middle" class="text" fill="white">8. LLM生成</text>
+  <text x="710" y="420" text-anchor="middle" class="small-text" fill="white">GPT-4/Claude</text>
+  
+  <!-- 9. 答案后处理 -->
+  <rect x="650" y="480" width="120" height="60" class="process-box"/>
+  <text x="710" y="505" text-anchor="middle" class="text" fill="white">9. 答案后处理</text>
+  <text x="710" y="520" text-anchor="middle" class="small-text" fill="white">格式化+引用</text>
+  
+  <!-- 10. 返回结果 -->
+  <rect x="650" y="580" width="120" height="60" class="user-box"/>
+  <text x="710" y="605" text-anchor="middle" class="text" fill="white">10. 返回结果</text>
+  <text x="710" y="620" text-anchor="middle" class="small-text" fill="white">答案+来源文档</text>
+  
+  <!-- 服务层 -->
+  <text x="900" y="70" class="subtitle">核心服务</text>
+  
+  <!-- QA Service -->
+  <rect x="850" y="120" width="120" height="60" class="service-box"/>
+  <text x="910" y="145" text-anchor="middle" class="text" fill="white">QA Service</text>
+  <text x="910" y="160" text-anchor="middle" class="small-text" fill="white">问答核心逻辑</text>
+  
+  <!-- Vector Service -->
+  <rect x="850" y="220" width="120" height="60" class="service-box"/>
+  <text x="910" y="245" text-anchor="middle" class="text" fill="white">Vector Service</text>
+  <text x="910" y="260" text-anchor="middle" class="small-text" fill="white">向量化服务</text>
+  
+  <!-- Document Service -->
+  <rect x="850" y="320" width="120" height="60" class="service-box"/>
+  <text x="910" y="345" text-anchor="middle" class="text" fill="white">Document Service</text>
+  <text x="910" y="360" text-anchor="middle" class="small-text" fill="white">文档管理</text>
+  
+  <!-- 监控与日志 -->
+  <text x="1050" y="70" class="subtitle">监控与日志</text>
+  
+  <!-- 向量搜索日志 -->
+  <rect x="1000" y="120" width="120" height="60" class="decision-box"/>
+  <text x="1060" y="145" text-anchor="middle" class="text" fill="white">向量搜索日志</text>
+  <text x="1060" y="160" text-anchor="middle" class="small-text" fill="white">实时检索过程</text>
+  
+  <!-- QA交互日志 -->
+  <rect x="1000" y="220" width="120" height="60" class="decision-box"/>
+  <text x="1060" y="245" text-anchor="middle" class="text" fill="white">QA交互日志</text>
+  <text x="1060" y="260" text-anchor="middle" class="small-text" fill="white">问答历史记录</text>
+  
+  <!-- 性能监控 -->
+  <rect x="1000" y="320" width="120" height="60" class="decision-box"/>
+  <text x="1060" y="345" text-anchor="middle" class="text" fill="white">性能监控</text>
+  <text x="1060" y="360" text-anchor="middle" class="small-text" fill="white">响应时间统计</text>
+  
+  <!-- 数据流箭头 -->
+  
+  <!-- 用户到文档上传 -->
+  <line x1="170" y1="110" x2="250" y2="110" class="arrow"/>
+  
+  <!-- 文档处理流程箭头 -->
+  <line x1="310" y1="140" x2="310" y2="180" class="arrow"/>
+  <line x1="310" y1="240" x2="310" y2="280" class="arrow"/>
+  <line x1="310" y1="340" x2="310" y2="380" class="arrow"/>
+  
+  <!-- 存储箭头 -->
+  <line x1="370" y1="150" x2="450" y2="150" class="data-flow"/>
+  <line x1="370" y1="250" x2="450" y2="250" class="data-flow"/>
+  <line x1="370" y1="410" x2="450" y2="350" class="data-flow"/>
+  
+  <!-- 问答流程箭头 -->
+  <line x1="710" y1="140" x2="710" y2="180" class="arrow"/>
+  <line x1="710" y1="240" x2="710" y2="280" class="arrow"/>
+  <line x1="710" y1="340" x2="710" y2="380" class="arrow"/>
+  <line x1="710" y1="440" x2="710" y2="480" class="arrow"/>
+  <line x1="710" y1="540" x2="710" y2="580" class="arrow"/>
+  
+  <!-- 向量检索到存储 -->
+  <line x1="650" y1="310" x2="570" y2="250" class="data-flow"/>
+  
+  <!-- 服务调用箭头 -->
+  <line x1="770" y1="110" x2="850" y2="150" class="arrow"/>
+  <line x1="770" y1="310" x2="850" y2="250" class="arrow"/>
+  <line x1="370" y1="210" x2="850" y2="350" class="arrow"/>
+  
+  <!-- 监控箭头 -->
+  <line x1="770" y1="310" x2="1000" y2="150" class="data-flow"/>
+  <line x1="770" y1="410" x2="1000" y2="250" class="data-flow"/>
+  <line x1="770" y1="510" x2="1000" y2="350" class="data-flow"/>
+  
+  <!-- 缓存检查 -->
+  <line x1="650" y1="210" x2="570" y2="350" class="data-flow"/>
+  
+  <!-- 数据流说明 -->
+  <text x="50" y="720" class="subtitle">数据流说明：</text>
+  
+  <rect x="50" y="740" width="20" height="3" class="arrow" stroke="#34495e"/>
+  <text x="80" y="750" class="text">控制流程</text>
+  
+  <rect x="200" y="740" width="20" height="3" class="data-flow" stroke="#e67e22"/>
+  <text x="230" y="750" class="text">数据流</text>
+  
+  <!-- 处理步骤详细说明 -->
+  <text x="50" y="780" class="subtitle">关键处理步骤：</text>
+  
+  <text x="50" y="800" class="text">1. 文档上传：支持PDF、Word、TXT等格式，最大100MB</text>
+  <text x="50" y="820" class="text">2. 文档解析：提取文本内容，保留结构信息</text>
+  <text x="50" y="840" class="text">3. 文本分割：按1000字符分块，重叠200字符</text>
+  <text x="50" y="860" class="text">4. 向量化：使用Embedding模型生成768维向量</text>
+  <text x="50" y="880" class="text">5. 存储：向量存入FAISS，元数据存入PostgreSQL</text>
+  
+  <text x="600" y="800" class="text">6. 问题预处理：查询增强，关键词提取</text>
+  <text x="600" y="820" class="text">7. 向量检索：相似度搜索，返回Top-K相关文档</text>
+  <text x="600" y="840" class="text">8. LLM生成：基于检索结果生成答案</text>
+  <text x="600" y="860" class="text">9. 后处理：格式化答案，添加引用信息</text>
+  <text x="600" y="880" class="text">10. 缓存：将结果缓存到Redis，提升响应速度</text>
+  
+  <!-- 性能指标 -->
+  <text x="50" y="920" class="subtitle">性能指标：</text>
+  <text x="50" y="940" class="text">• 文档处理：平均2-5秒/MB</text>
+  <text x="50" y="960" class="text">• 问答响应：平均1-3秒</text>
+  <text x="300" y="940" class="text">• 向量检索：&lt;100ms</text>
+  <text x="300" y="960" class="text">• 缓存命中率：&gt;80%</text>
+  <text x="500" y="940" class="text">• 并发支持：100+ QPS</text>
+  <text x="500" y="960" class="text">• 准确率：&gt;90%</text>
+  
+</svg>
