@@ -328,7 +328,7 @@ const QA = ({ user }: QAProps) => {
         feedback: null,
         sources: sourceDocs.map((doc: any) => ({
           document_id: doc.document_id?.toString() || '',
-          document_title: doc.metadata?.title || doc.metadata?.filename || doc.title || '未知文档',
+          document_title: doc.title || doc.metadata?.title || doc.metadata?.filename || '未知文档',
           chunk_id: `chunk_${doc.document_id}`,
           relevance_score: doc.similarity_score,
           content: doc.content || doc.chunk_content,
