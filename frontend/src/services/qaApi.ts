@@ -184,8 +184,193 @@ class QAApiService {
       { title }
     )
   }
+
+  // =====================
+  // LLM 模型相关接口
+  // =====================
+
+  // 获取可用模型列表
+  async getAvailableModels(): Promise<string[]> {
+    const res = await ApiService.get<{ available_models: string[] }>(
+      `${this.baseUrl}/available-models`
+    )
+    return res.available_models
+  }
+
+  // 获取当前使用的模型
+  async getCurrentModel(): Promise<string> {
+    const res = await ApiService.get<{ current_model: string }>(
+      `${this.baseUrl}/current-model`
+    )
+    return res.current_model
+  }
+
+  // 切换LLM模型
+  async switchModel(modelName: string, config?: Record<string, any>): Promise<{ success: boolean; message?: string }> {
+    return ApiService.post<{ success: boolean; message?: string }>(
+      `${this.baseUrl}/switch-model`,
+      { model_name: modelName, config }
+    )
+  }
+
+  // Kimi文件上传相关API
+  async uploadFileToKimi(file: File): Promise<{
+    success: boolean
+    message: string
+    file_info: {
+      id: string
+      name: string
+      size: number
+      type: string
+      created_at: string
+    }
+    content_preview: string
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    
+    return ApiService.post<{
+      success: boolean
+      message: string
+      file_info: {
+        id: string
+        name: string
+        size: number
+        type: string
+        created_at: string
+      }
+      content_preview: string
+    }>(
+      `${this.baseUrl}/kimi/upload-file`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      }
+    )
+  }
+
+  // 获取Kimi文件列表
+  async getKimiFiles(): Promise<{
+    success: boolean
+    files: Array<{
+      id: string
+      name: string
+      size: number
+      type: string
+      created_at: string
+    }>
+    total: number
+  }> {
+    return ApiService.get<{
+      success: boolean
+      files: Array<{
+        id: string
+        name: string
+        size: number
+        type: string
+        created_at: string
+      }>
+      total: number
+    }>(`${this.baseUrl}/kimi/files`)
+  }
+
+  // 获取Kimi文件信息
+  async getKimiFileInfo(fileId: string): Promise<{
+    success: boolean
+    file_info: {
+      id: string
+      name: string
+      size: number
+      type: string
+      created_at: string
+    }
+  }> {
+    return ApiService.get<{
+      success: boolean
+      file_info: {
+        id: string
+        name: string
+        size: number
+        type: string
+        created_at: string
+      }
+    }>(`${this.baseUrl}/kimi/files/${fileId}`)
+  }
+
+  // 获取Kimi文件内容
+  async getKimiFileContent(fileId: string): Promise<{
+    success: boolean
+    content: string
+  }> {
+    return ApiService.get<{
+      success: boolean
+      content: string
+    }>(`${this.baseUrl}/kimi/files/${fileId}/content`)
+  }
+
+  // 删除Kimi文件
+  async deleteKimiFile(fileId: string): Promise<{
+    success: boolean
+    message: string
+  }> {
+    return ApiService.delete<{
+      success: boolean
+      message: string
+    }>(`${this.baseUrl}/kimi/files/${fileId}`)
+  }
+
+  // 批量上传文件到Kimi
+  async batchUploadFilesToKimi(files: File[]): Promise<{
+    success: boolean
+    message: string
+    results: Array<{
+      filename: string
+      success: boolean
+      file_info?: {
+        id: string
+        name: string
+        size: number
+        type: string
+        created_at: string
+      }
+      content_preview?: string
+      error?: string
+    }>
+  }> {
+    const formData = new FormData()
+    files.forEach(file => {
+      formData.append('files', file)
+    })
+    
+    return ApiService.post<{
+      success: boolean
+      message: string
+      results: Array<{
+        filename: string
+        success: boolean
+        file_info?: {
+          id: string
+          name: string
+          size: number
+          type: string
+          created_at: string
+        }
+        content_preview?: string
+        error?: string
+      }>
+    }>(
+      `${this.baseUrl}/kimi/batch-upload`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      }
+    )
+  }
 }
 
-// 导出单例实例
 export const qaApi = new QAApiService()
 export default qaApi

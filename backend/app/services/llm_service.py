@@ -16,14 +16,25 @@ class LLMService:
     def _create_llm(self, model_name: str, model_config: Optional[Dict[str, Any]] = None) -> ChatOpenAI:
         """创建LLM实例"""
         try:
-            # 默认配置
-            config = {
-                "openai_api_key": os.getenv('DEEPSEEK_API_KEY', settings.deepseek_api_key),
-                "openai_api_base": settings.deepseek_base_url,
-                "model_name": model_name,
-                "temperature": settings.deepseek_temperature,
-                "max_tokens": settings.deepseek_max_tokens
-            }
+            # 根据模型名称选择配置
+            if model_name.startswith('kimi'):
+                # Kimi模型配置
+                config = {
+                    "openai_api_key": os.getenv('KIMI_API_KEY', settings.kimi_api_key),
+                    "openai_api_base": settings.kimi_base_url,
+                    "model_name": model_name,
+                    "temperature": settings.kimi_temperature,
+                    "max_tokens": settings.kimi_max_tokens
+                }
+            else:
+                # DeepSeek模型配置（默认）
+                config = {
+                    "openai_api_key": os.getenv('DEEPSEEK_API_KEY', settings.deepseek_api_key),
+                    "openai_api_base": settings.deepseek_base_url,
+                    "model_name": model_name,
+                    "temperature": settings.deepseek_temperature,
+                    "max_tokens": settings.deepseek_max_tokens
+                }
             
             # 如果提供了模型配置，则覆盖默认配置
             if model_config:

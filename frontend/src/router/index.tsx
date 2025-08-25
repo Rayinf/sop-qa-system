@@ -4,7 +4,7 @@ import MainLayout from '../components/Layout/MainLayout'
 import Login from '../pages/Login'
 import Dashboard from '../pages/Dashboard'
 import QA from '../pages/QA'
-import Documents from '../pages/Documents'
+import UnifiedKnowledgeManagement from '../pages/UnifiedKnowledgeManagement'
 import Profile from '../pages/Profile'
 import Admin from '../pages/Admin'
 import Settings from '../pages/Settings'
@@ -82,8 +82,8 @@ const router = createBrowserRouter([
         element: <QA />
       },
       {
-        path: 'documents',
-        element: <Documents />
+        path: 'knowledge',
+        element: <UnifiedKnowledgeManagement />
       },
       {
         path: 'profile',

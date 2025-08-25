@@ -2,9 +2,11 @@ from typing import List, Optional
 import logging
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+import tempfile
+import os
 
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional
@@ -14,11 +16,13 @@ from app.models.schemas import (
     FeedbackRequest, PaginatedResponse, ModelSwitchRequest
 )
 from app.services.qa_service import QAService
+from app.services.kimi_file_service import KimiFileService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["qa"])
 qa_service = QAService()
+kimi_file_service = KimiFileService()
 
 @router.post("/switch-model", response_model=dict)
 async def switch_model(
@@ -110,8 +114,9 @@ def ask_question(
             user_id=user_id,
             category=question_request.category,
             session_id=question_request.session_id,
-            use_multi_retrieval=question_request.use_multi_retrieval,
-            overrides=question_request.overrides
+            overrides=question_request.overrides,
+            kimi_files=question_request.kimi_files,
+            active_kb_ids=question_request.active_kb_ids
         )
         
         logger.info(
@@ -746,3 +751,193 @@ def qa_health_check():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+# Kimi文件上传相关API端点
+@router.post("/kimi/upload-file")
+async def upload_file_to_kimi(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    上传文件到Kimi API
+    """
+    try:
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        
+        try:
+            # 上传文件到Kimi
+            result = kimi_file_service.upload_and_extract(temp_file_path)
+            
+            if result:
+                return {
+                    "success": True,
+                    "message": "文件上传成功",
+                    "file_info": result["file_info"],
+                    "content_preview": result["content"][:500] + "..." if len(result["content"]) > 500 else result["content"]
+                }
+            else:
+                raise HTTPException(status_code=400, detail="文件上传失败")
+                
+        finally:
+            # 清理临时文件
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"文件上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/kimi/files")
+async def list_kimi_files(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Kimi已上传文件列表
+    """
+    try:
+        files = kimi_file_service.list_files()
+        return {
+            "success": True,
+            "files": files,
+            "total": len(files)
+        }
+        
+    except Exception as e:
+        logger.error(f"获取文件列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/kimi/files/{file_id}")
+async def get_kimi_file_info(
+    file_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Kimi文件信息
+    """
+    try:
+        file_info = kimi_file_service.get_file_info(file_id)
+        
+        if file_info:
+            return {
+                "success": True,
+                "file_info": file_info
+            }
+        else:
+            raise HTTPException(status_code=404, detail="文件不存在")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取文件信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/kimi/files/{file_id}/content")
+async def get_kimi_file_content(
+    file_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Kimi文件内容
+    """
+    try:
+        content = kimi_file_service.get_file_content(file_id)
+        
+        if content:
+            return {
+                "success": True,
+                "content": content
+            }
+        else:
+            raise HTTPException(status_code=404, detail="文件内容获取失败")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取文件内容失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/kimi/files/{file_id}")
+async def delete_kimi_file(
+    file_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    删除Kimi文件
+    """
+    try:
+        success = kimi_file_service.delete_file(file_id)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "文件删除成功"
+            }
+        else:
+            raise HTTPException(status_code=400, detail="文件删除失败")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除文件失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/kimi/batch-upload")
+async def batch_upload_files_to_kimi(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    批量上传文件到Kimi API
+    """
+    try:
+        temp_files = []
+        results = []
+        
+        # 保存所有临时文件
+        for file in files:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as temp_file:
+                content = await file.read()
+                temp_file.write(content)
+                temp_files.append(temp_file.name)
+        
+        try:
+            # 批量上传
+            upload_results = kimi_file_service.upload_multiple_files(temp_files)
+            
+            for i, result in enumerate(upload_results):
+                results.append({
+                    "filename": files[i].filename,
+                    "success": True,
+                    "file_info": result["file_info"],
+                    "content_preview": result["content"][:200] + "..." if len(result["content"]) > 200 else result["content"]
+                })
+            
+            # 处理失败的文件
+            for i in range(len(upload_results), len(files)):
+                results.append({
+                    "filename": files[i].filename,
+                    "success": False,
+                    "error": "上传失败"
+                })
+            
+            return {
+                "success": True,
+                "message": f"批量上传完成，成功 {len(upload_results)}/{len(files)} 个文件",
+                "results": results
+            }
+            
+        finally:
+            # 清理所有临时文件
+            for temp_file_path in temp_files:
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
+                    
+    except Exception as e:
+        logger.error(f"批量上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

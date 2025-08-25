@@ -40,6 +40,7 @@ import type { UploadProps } from 'antd'
 import { User } from '../types/index'
 import { SettingsApi, SystemSettings, NotificationSettings, SecuritySettings } from '../services/settingsApi'
 import { ApiService } from '../services/api'
+import { qaApi } from '../services/qaApi'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -78,6 +79,12 @@ const Settings = ({ user }: SettingsProps) => {
   const [form] = Form.useForm()
   const [notificationForm] = Form.useForm()
   const [securityForm] = Form.useForm()
+  // LLM 模型相关状态
+  const [availableLLMModels, setAvailableLLMModels] = useState<string[]>([])
+  const [currentLLMModel, setCurrentLLMModel] = useState<string>('')
+  const [kimiFiles, setKimiFiles] = useState<any[]>([])
+  const [kimiFileLoading, setKimiFileLoading] = useState(false)
+  const [llmLoading, setLlmLoading] = useState(false)
 
   // 加载系统设置
   const loadSystemSettings = async (): Promise<void> => {
@@ -132,6 +139,110 @@ const Settings = ({ user }: SettingsProps) => {
     }
   }
 
+  // 加载LLM模型设置
+  const loadLLMSettings = async (): Promise<void> => {
+    try {
+      setLlmLoading(true)
+      const [models, current] = await Promise.all([
+        qaApi.getAvailableModels(),
+        qaApi.getCurrentModel()
+      ])
+      setAvailableLLMModels(models)
+      setCurrentLLMModel(current)
+    } catch (error) {
+      console.error('加载LLM模型信息失败:', error)
+      message.error('加载LLM模型信息失败')
+    } finally {
+      setLlmLoading(false)
+    }
+  }
+
+  // 切换LLM模型
+  const handleSwitchLLMModel = async (modelName: string): Promise<void> => {
+    try {
+      setLlmLoading(true)
+      const res = await qaApi.switchModel(modelName)
+      if (res?.success) {
+        setCurrentLLMModel(modelName)
+        message.success(`已切换到模型：${modelName}`)
+        
+        // 如果切换到Kimi模型，加载文件列表
+        if (modelName.toLowerCase().includes('kimi')) {
+          loadKimiFiles()
+        }
+      } else {
+        message.error(res?.message || '切换模型失败')
+      }
+    } catch (error) {
+      console.error('切换LLM模型失败:', error)
+      message.error('切换LLM模型失败')
+    } finally {
+      setLlmLoading(false)
+    }
+  }
+
+  // 加载Kimi文件列表
+  const loadKimiFiles = async (): Promise<void> => {
+    try {
+      setKimiFileLoading(true)
+      const result = await qaApi.getKimiFiles()
+      if (result.success) {
+        setKimiFiles(result.files)
+      }
+    } catch (error) {
+      console.error('加载Kimi文件列表失败:', error)
+    } finally {
+      setKimiFileLoading(false)
+    }
+  }
+
+  // 处理Kimi文件上传
+  const handleKimiFileUpload = async (file: File): Promise<boolean> => {
+    try {
+      setKimiFileLoading(true)
+      const result = await qaApi.uploadFileToKimi(file)
+      if (result.success) {
+        message.success(`文件 ${file.name} 上传成功`)
+        loadKimiFiles() // 重新加载文件列表
+      } else {
+        message.error('文件上传失败')
+      }
+    } catch (error) {
+      console.error('文件上传失败:', error)
+      message.error('文件上传失败')
+    } finally {
+      setKimiFileLoading(false)
+    }
+    return false // 阻止默认上传行为
+  }
+
+  // 删除Kimi文件
+  const handleDeleteKimiFile = async (fileId: string): Promise<void> => {
+    try {
+      setKimiFileLoading(true)
+      const result = await qaApi.deleteKimiFile(fileId)
+      if (result.success) {
+        message.success('文件删除成功')
+        loadKimiFiles() // 重新加载文件列表
+      } else {
+        message.error('文件删除失败')
+      }
+    } catch (error) {
+      console.error('文件删除失败:', error)
+      message.error('文件删除失败')
+    } finally {
+      setKimiFileLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadSystemSettings()
+    loadNotificationSettings()
+    loadSecuritySettings()
+    loadEmbeddingSettings()
+    loadLLMSettings()
+  }, [])
+
   // 切换embedding模式
   const handleSwitchEmbeddingMode = async (mode: string): Promise<void> => {
     try {
@@ -147,13 +258,6 @@ const Settings = ({ user }: SettingsProps) => {
       setLoading(false)
     }
   }
-
-  useEffect(() => {
-    loadSystemSettings()
-    loadNotificationSettings()
-    loadSecuritySettings()
-    loadEmbeddingSettings()
-  }, [])
 
   // 保存系统设置
   const handleSaveSystemSettings = async (): Promise<void> => {
@@ -557,6 +661,37 @@ const Settings = ({ user }: SettingsProps) => {
                           </Text>
                         </div>
                       )}
+                    </div>
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Divider>LLM模型设置</Divider>
+
+              <Row gutter={[24, 16]}>
+                <Col xs={24} md={12}>
+                  <Form.Item label="选择LLM模型">
+                    <Select
+                      value={currentLLMModel || undefined}
+                      placeholder="请选择模型"
+                      onChange={handleSwitchLLMModel}
+                      loading={llmLoading}
+                      style={{ width: '100%' }}
+                      showSearch
+                      filterOption={(input, option) => (option?.children as unknown as string).toLowerCase().includes(input.toLowerCase())}
+                    >
+                      {availableLLMModels.map(model => (
+                        <Option key={model} value={model}>{model}</Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item label="当前模型">
+                    <div style={{ padding: '8px 12px', backgroundColor: '#f5f5f5', borderRadius: '6px' }}>
+                      <Text strong>正在使用:</Text>
+                      <br />
+                      <Text type="secondary">{currentLLMModel || '未设置'}</Text>
                     </div>
                   </Form.Item>
                 </Col>

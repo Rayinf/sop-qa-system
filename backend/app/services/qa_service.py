@@ -72,6 +72,8 @@ class QAService:
         
         # 问答链
         self._qa_chain = None
+        # 记录已知的向量库版本（用于在版本变化时重建问答链）
+        self._vector_store_version_seen = None
         
         # 初始化提示模板
         self.setup_prompts()
@@ -117,6 +119,26 @@ class QAService:
         if self.redis_client is None:
             self.redis_client = get_redis_client()
         return self.redis_client
+
+    def _get_current_vector_store_version(self) -> int:
+        """获取当前向量库版本号（来自Redis），默认为0"""
+        try:
+            client = self.get_redis_client()
+            if client:
+                value = client.get("vector_store:version")
+                if value is None:
+                    return 0
+                try:
+                    return int(value)
+                except Exception:
+                    try:
+                        return int(value.decode())
+                    except Exception:
+                        return 0
+            return 0
+        except Exception as e:
+            logger.warning(f"获取向量库版本失败: {e}")
+            return 0
     
     def setup_prompts(self):
         """设置提示模板"""
@@ -166,6 +188,18 @@ class QAService:
     @property
     def qa_chain(self) -> Optional[RetrievalQA]:
         """获取问答链"""
+        try:
+            current_version = self._get_current_vector_store_version()
+            if self._vector_store_version_seen is None:
+                self._vector_store_version_seen = current_version
+            elif current_version != self._vector_store_version_seen:
+                logger.info(
+                    f"检测到向量库版本变化: {self._vector_store_version_seen} -> {current_version}，重建问答链"
+                )
+                self._qa_chain = None
+                self._vector_store_version_seen = current_version
+        except Exception as e:
+            logger.warning(f"检查向量库版本失败: {e}")
         if self._qa_chain is None:
             self._qa_chain = self.create_qa_chain()
         return self._qa_chain
@@ -227,13 +261,19 @@ class QAService:
                     user_id: Optional[int] = None,
                     category: Optional[str] = None,
                     session_id: Optional[str] = None,
-                    use_multi_retrieval: bool = True,
-                    overrides: Optional[Dict[str, Any]] = None) -> AnswerResponse:
+                    overrides: Optional[Dict[str, Any]] = None,
+                    kimi_files: Optional[List[str]] = None,
+                    active_kb_ids: Optional[List[uuid.UUID]] = None) -> AnswerResponse:
         """回答问题"""
         try:
             start_time = datetime.now(timezone.utc)
-            logger.info(f"🤖 开始处理问答请求: '{question[:100]}{'...' if len(question) > 100 else ''}'")
+            logger.info(f"🤖 开始处理问答请求: '{question[:100]}{'...' if len(question) > 100 else ''}'") 
             logger.info(f"📋 请求参数 - 用户ID: {user_id}, 类别: {category}, 会话ID: {session_id}")
+            
+            # 检查是否使用Kimi模型且有文件
+            if kimi_files and len(kimi_files) > 0 and 'kimi' in self.current_model.lower():
+                logger.info(f"🔍 检测到Kimi模型文件问答: {len(kimi_files)} 个文件")
+                return self._handle_kimi_file_question(db, question, kimi_files, user_id, session_id, start_time)
             
             # 检查缓存
             logger.info("🔍 步骤1: 检查答案缓存")
@@ -278,15 +318,57 @@ class QAService:
             logger.info(f"📝 增强查询: '{query[:100]}{'...' if len(query) > 100 else ''}'")
             
             # 选择检索策略
-            if use_multi_retrieval and self.multi_retrieval_service:
+            if self.multi_retrieval_service:
                 logger.info("🔍 步骤5: 使用多知识库路由执行问答")
-                return self.ask_question_with_routing(db, question, user_id, session_id, start_time)
+                return self.ask_question_with_routing(db, question, user_id, session_id, start_time, active_kb_ids)
             elif self.unified_retrieval_service:
                 logger.info("🔍 步骤5: 使用统一检索服务执行问答")
-                return self.ask_question_with_unified_retrieval(db, question, query, user_id, session_id, start_time, category, overrides)
+                return self.ask_question_with_unified_retrieval(db, question, query, user_id, session_id, start_time, category, overrides, active_kb_ids)
             else:
                 logger.info("🔍 步骤5: 使用传统问答链执行向量搜索")
-                result = self.qa_chain({"query": query})
+                # 如果指定了知识库ID，使用向量服务直接搜索并构建答案
+                if active_kb_ids:
+                    logger.info(f"🎯 限制搜索范围到知识库: {active_kb_ids}")
+                    # 使用向量服务的知识库过滤功能
+                    kb_ids_str = [str(kb_id) for kb_id in active_kb_ids]
+                    docs_with_scores = self.vector_service.search_similar_documents(
+                        query=query,
+                        k=settings.retrieval_k,
+                        active_kb_ids=kb_ids_str
+                    )
+                    source_docs = [doc for doc, score in docs_with_scores]
+                    
+                    # 如果找到相关文档，使用LLM生成答案
+                    if source_docs:
+                        context = "\n\n".join([doc.page_content for doc in source_docs])
+                        prompt = f"""基于以下上下文回答问题：
+
+上下文：
+{context}
+
+问题：{question}
+
+请提供准确、详细的答案："""
+                        
+                        try:
+                            answer = self.llm.invoke(prompt).content if hasattr(self.llm.invoke(prompt), 'content') else str(self.llm.invoke(prompt))
+                        except Exception as e:
+                            logger.error(f"LLM调用失败: {e}")
+                            answer = "抱歉，在生成答案时遇到了问题。"
+                        
+                        result = {
+                            "result": answer,
+                            "source_documents": source_docs
+                        }
+                    else:
+                        logger.warning("在指定知识库中未找到相关文档")
+                        result = {
+                            "result": "抱歉，在指定的知识库中没有找到相关信息来回答您的问题。",
+                            "source_documents": []
+                        }
+                else:
+                    # 使用传统问答链
+                    result = self.qa_chain({"query": query})
             
             source_docs = result.get("source_documents", [])
             logger.info(f"📊 向量搜索完成: {len(source_docs)} 个相关文档")
@@ -364,7 +446,8 @@ class QAService:
          session_id: Optional[str] = None,
          start_time: Optional[datetime] = None,
          category: Optional[str] = None,
-         overrides: Optional[Dict[str, Any]] = None
+         overrides: Optional[Dict[str, Any]] = None,
+         active_kb_ids: Optional[List[uuid.UUID]] = None
      ) -> AnswerResponse:
          """
          使用统一检索服务回答问题
@@ -376,10 +459,15 @@ class QAService:
              logger.info("🚀 开始统一检索问答")
              
              # 使用统一检索服务获取相关文档
+             retrieval_params = overrides.copy() if overrides else {}
+             if active_kb_ids:
+                 retrieval_params['active_kb_ids'] = active_kb_ids
+                 logger.info(f"🎯 限制检索范围到知识库: {active_kb_ids}")
+             
              retrieval_result = self.unified_retrieval_service.retrieve(
                  query=query,
                  category=category,
-                 **overrides if overrides else {}
+                 **retrieval_params
              )
              
              # 提取检索结果
@@ -501,7 +589,8 @@ class QAService:
         question: str,
         user_id: Optional[int] = None,
         session_id: Optional[str] = None,
-        start_time: Optional[datetime] = None
+        start_time: Optional[datetime] = None,
+        active_kb_ids: Optional[List[uuid.UUID]] = None
     ) -> AnswerResponse:
         """
         使用多知识库路由回答问题
@@ -513,6 +602,10 @@ class QAService:
             logger.info("🚀 开始多知识库路由问答")
             
             # 使用多知识库路由服务
+            # 注意：MultiRetrievalService 暂不支持 active_kb_ids 参数
+            if active_kb_ids:
+                logger.warning(f"⚠️ MultiRetrievalService 暂不支持知识库过滤，忽略 active_kb_ids: {active_kb_ids}")
+            
             routing_result = self.multi_retrieval_service.ask_question_with_routing(
                 question=question,
                 session_id=session_id,
@@ -689,7 +782,9 @@ class QAService:
                     metadata=sanitized_metadata,
                     similarity_score=similarity_score,
                     document_id=sanitized_metadata.get('document_id'),
-                    page_number=page_no
+                    page_number=page_no,
+                    kb_id=sanitized_metadata.get('kb_id'),
+                    kb_name=sanitized_metadata.get('kb_name')
                 )
                 converted_docs.append(source_doc)
             except Exception as e:
@@ -1083,6 +1178,86 @@ class QAService:
             "利益相关者", "关联方", "相关人员", "相关组织"
         ]
         return any(keyword in question.lower() for keyword in stakeholder_keywords)
+    
+    def _handle_kimi_file_question(self, db: Session, question: str, 
+                                  kimi_files: List[str], user_id: Optional[int], 
+                                  session_id: Optional[str], start_time: datetime) -> AnswerResponse:
+        """处理Kimi模型的文件问答"""
+        try:
+            logger.info(f"📁 开始处理Kimi文件问答，文件数量: {len(kimi_files)}")
+            
+            # 获取文件内容
+            from app.services.kimi_file_service import KimiFileService
+            kimi_file_service = KimiFileService()
+            
+            file_contents = []
+            for file_id in kimi_files:
+                try:
+                    content = kimi_file_service.get_file_content(file_id)
+                    if content:
+                        file_contents.append(content)
+                        logger.info(f"📄 成功获取文件内容: {file_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ 获取文件内容失败: {file_id}, 错误: {str(e)}")
+            
+            if not file_contents:
+                logger.error("❌ 未能获取任何文件内容")
+                return self.create_error_response("无法获取文件内容，请重新上传文件")
+            
+            # 构建包含文件内容的提示
+            file_context = "\n\n".join([f"文件内容 {i+1}:\n{content}" for i, content in enumerate(file_contents)])
+            enhanced_question = f"基于以下文件内容回答问题：\n\n{file_context}\n\n问题：{question}"
+            
+            logger.info(f"📝 构建增强问题，总长度: {len(enhanced_question)} 字符")
+            
+            # 使用LLM服务直接回答
+            if self.llm_service:
+                try:
+                    answer = self.llm_service.generate_response(enhanced_question)
+                    logger.info(f"✅ Kimi模型回答生成成功，长度: {len(answer)} 字符")
+                    
+                    # 计算处理时间
+                    processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+                    
+                    # 创建源文档（基于文件）
+                    source_documents = []
+                    for i, file_id in enumerate(kimi_files):
+                        source_documents.append(SourceDocument(
+                            content=file_contents[i][:200] + "..." if len(file_contents[i]) > 200 else file_contents[i],
+                            metadata={
+                                "source": f"kimi_file_{file_id}",
+                                "file_id": file_id,
+                                "type": "kimi_file"
+                            },
+                            score=1.0
+                        ))
+                    
+                    # 记录问答日志
+                    qa_log = self.log_qa_interaction(
+                        db, question, answer, source_documents, 
+                        user_id, session_id, processing_time
+                    )
+                    
+                    return self.create_answer_response(
+                        question=question,
+                        answer=answer,
+                        source_documents=source_documents,
+                        processing_time=processing_time,
+                        session_id=session_id,
+                        metadata={"model": self.current_model, "kimi_files": kimi_files},
+                        qa_log_id=qa_log.id if qa_log else None
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"❌ Kimi模型回答生成失败: {str(e)}")
+                    return self.create_error_response(f"生成回答时出错: {str(e)}")
+            else:
+                logger.error("❌ LLM服务未初始化")
+                return self.create_error_response("语言模型服务不可用")
+                
+        except Exception as e:
+            logger.error(f"❌ 处理Kimi文件问答时出错: {str(e)}")
+            return self.create_error_response(f"处理文件问答时出错: {str(e)}")
     
     def _handle_stakeholder_question(self, db: Session, question: str, 
                                    user_id: Optional[int], session_id: Optional[str], 

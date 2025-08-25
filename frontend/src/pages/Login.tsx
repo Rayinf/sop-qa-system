@@ -59,7 +59,7 @@ const Login = ({ onLogin, loading = false, error }: LoginProps) => {
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
           borderRadius: 12
         }}
-        bodyStyle={{ padding: '32px' }}
+        styles={{ body: { padding: '32px' } }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div style={{ textAlign: 'center' }}>

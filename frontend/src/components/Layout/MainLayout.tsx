@@ -16,6 +16,7 @@ import {
   DashboardOutlined,
   QuestionCircleOutlined,
   FileTextOutlined,
+  DatabaseOutlined,
   UserOutlined,
   SettingOutlined,
   LogoutOutlined,
@@ -50,9 +51,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({ user, onLogout }) => {
       label: '智能问答',
     },
     {
-      key: '/documents',
-      icon: <FileTextOutlined />,
-      label: '文档管理',
+      key: '/knowledge',
+      icon: <DatabaseOutlined />,
+      label: '知识库管理',
     },
     {
       key: '/profile',
@@ -72,10 +73,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ user, onLogout }) => {
           key: '/admin/users',
           label: '用户管理',
         },
-        {
-          key: '/admin/documents',
-          label: '文档管理',
-        },
+        // 移除文档管理子菜单，文档管理已整合到知识库
+        // { key: '/admin/documents', label: '文档管理' },
         {
           key: '/admin/system',
           label: '系统设置',

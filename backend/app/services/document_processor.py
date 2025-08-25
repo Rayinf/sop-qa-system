@@ -366,7 +366,8 @@ class DocumentProcessor:
                         category: str = "通用文档",
                         tags: List[str] = None,
                         version: str = "1.0",
-                        user_id: int = None) -> Dict[str, Any]:
+                        user_id: int = None,
+                        kb_id: Optional[str] = None) -> Dict[str, Any]:
         """处理文档的主要方法"""
         try:
             # 检查文件是否存在
@@ -413,7 +414,8 @@ class DocumentProcessor:
                 'tags': tags or [],
                 'version': version,
                 'upload_by': user_id,
-                'total_chunks': len(chunks)
+                'total_chunks': len(chunks),
+                'kb_id': kb_id
             }
             
             # 增强chunk元数据
@@ -453,6 +455,7 @@ class DocumentProcessor:
                 tags=metadata['tags'],
                 version=metadata['version'],
                 uploaded_by=None,  # 暂时设为None，避免外键约束问题
+                kb_id=metadata.get('kb_id'),  # 添加知识库ID
                 doc_metadata={
                     'processing_time': processing_result['processing_time'],
                     'chunk_size': settings.chunk_size,
@@ -460,8 +463,8 @@ class DocumentProcessor:
                     'file_hash': metadata['file_hash'],
                     'total_chunks': metadata['total_chunks']
                 },
-                # 新增字段: 初始处理状态为processed
-                processing_status="completed"
+                # 设置文档状态为已处理
+                status="processed"
             )
             
             db.add(document)
@@ -496,6 +499,7 @@ class DocumentProcessor:
                     chunk_text=chunk.page_content,
                     chunk_index=sanitized_meta['chunk_index'],
                     page_number=sanitized_meta.get('page', None),
+                    kb_id=sanitized_meta.get('kb_id'),  # 添加知识库ID
                     vector_metadata=sanitized_meta
                 )
                 vector_indices.append(vector_index)
@@ -577,26 +581,7 @@ class DocumentProcessor:
             db.rollback()
             return False
 
-    # 新增: 更新文档 processing_status 字段
-    def update_processing_status(self,
-                                 db: Session,
-                                 document_id: str,
-                                 processing_status: str) -> bool:
-        """更新文档处理状态"""
-        try:
-            document = db.query(DocumentModel).filter(
-                DocumentModel.id == document_id
-            ).first()
-            if document:
-                document.processing_status = processing_status
-                document.updated_at = datetime.utcnow()
-                db.commit()
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"更新文档处理状态失败: {e}")
-            db.rollback()
-            return False
+
     
     def _auto_classify_document(self, documents: List[Document], title: str) -> Optional[str]:
         """自动分类文档"""

@@ -1,0 +1,9 @@
+这是一个测试文档，用于验证文档状态流转功能。
+
+文档内容包括：
+1. 测试文档上传功能
+2. 验证状态从 uploaded -> processing -> processed 的流转
+3. 测试向量化功能，状态从 processed -> vectorizing -> vectorized
+4. 确保前端状态显示正确
+
+这个文档将帮助我们验证整个文档处理流程是否正常工作。

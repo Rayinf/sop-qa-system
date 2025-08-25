@@ -283,7 +283,7 @@ const Dashboard = ({ user }: DashboardProps) => {
               </Button>
               <Button 
                 icon={<FileTextOutlined />}
-                onClick={() => navigate('/documents')}
+                onClick={() => navigate('/knowledge')}
               >
                 管理文档
               </Button>

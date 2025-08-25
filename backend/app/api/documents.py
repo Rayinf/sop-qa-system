@@ -1,6 +1,7 @@
 from typing import List, Optional
 import logging
 import time
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -38,6 +39,7 @@ async def upload_document(
     category: Optional[str] = Query(None, description="文档类别，留空则自动分类"),
     tags: Optional[str] = Query(None, description="标签，用逗号分隔"),
     version: str = Query("1.0", description="版本号"),
+    kb_id: Optional[str] = Query(None, description="知识库ID"),
     auto_vectorize: bool = Query(True, description="是否自动向量化"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -51,6 +53,7 @@ async def upload_document(
     - **category**: 文档类别
     - **tags**: 标签列表
     - **version**: 版本号
+    - **kb_id**: 知识库ID
     - **auto_vectorize**: 是否自动向量化
     """
     try:
@@ -70,7 +73,8 @@ async def upload_document(
             db=db,
             file=file,
             document_data=document_data,
-            user_id=current_user.id
+            user_id=current_user.id,
+            kb_id=kb_id
         )
         
         # 如果需要自动向量化，添加到后台任务
@@ -99,6 +103,7 @@ def get_documents(
     status: Optional[str] = Query(None, description="文档状态过滤"),
     search: Optional[str] = Query(None, description="搜索关键词"),
     my_documents: bool = Query(False, description="只显示我的文档"),
+    kb_id: Optional[str] = Query(None, description="知识库ID过滤"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     document_service: DocumentService = Depends(get_document_service)
@@ -118,7 +123,8 @@ def get_documents(
             category=category,
             status=status,
             user_id=user_id,
-            search_query=search
+            search_query=search,
+            kb_id=kb_id
         )
         
         # 转换为响应格式
@@ -342,7 +348,7 @@ def get_vectorization_progress(
                     "message": "文档已完成向量化",
                     "error": None
                 }
-            elif document.processing_status == "vectorizing":
+            elif document.status == "vectorizing":
                 return {
                     "document_id": document_id,
                     "status": "processing",
@@ -602,10 +608,116 @@ def get_document_statuses():
     return {
         "statuses": [
             "uploaded",
-            "processing",
+            "processing", 
             "processed",
             "vectorizing",
             "vectorized",
-            "error"
+            "failed",
+            "archived",
+            "deleted"
         ]
     }
+
+@router.patch("/{document_id}/move-to-kb")
+def move_document_to_kb(
+    document_id: str,
+    kb_id: str = Query(..., description="目标知识库ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    document_service: DocumentService = Depends(get_document_service)
+):
+    """移动文档到指定知识库"""
+    try:
+        # 获取文档
+        document = document_service.get_document_by_id(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        
+        # 检查权限（可以是文档上传者或管理员）
+        if (
+            document.uploaded_by != current_user.id
+            and current_user.role != "admin"
+            and not current_user.is_superuser
+        ):
+            raise HTTPException(status_code=403, detail="无权限操作此文档")
+        
+        # 验证并转换kb_id
+        try:
+            target_kb_uuid = uuid.UUID(kb_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="kb_id格式不正确")
+        
+        # 更新文档的知识库ID
+        document.kb_id = target_kb_uuid
+        db.commit()
+        db.refresh(document)
+        
+        return {
+            "success": True,
+            "message": "文档移动成功",
+            "data": document_service.get_document_response(document)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"移动文档到知识库失败: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="移动文档失败")
+
+@router.post("/batch/move-to-kb")
+def batch_move_documents_to_kb(
+    request_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    document_service: DocumentService = Depends(get_document_service)
+):
+    """批量移动文档到指定知识库"""
+    try:
+        document_ids = request_data.get("document_ids", [])
+        kb_id = request_data.get("kb_id")
+        
+        if not document_ids or not kb_id:
+            raise HTTPException(status_code=400, detail="缺少必要参数")
+        
+        # 验证并转换kb_id
+        try:
+            target_kb_uuid = uuid.UUID(kb_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="kb_id格式不正确")
+        
+        success_count = 0
+        failed_count = 0
+        
+        for doc_id in document_ids:
+            try:
+                document = document_service.get_document_by_id(db, doc_id)
+                if document and (
+                    document.uploaded_by == current_user.id
+                    or current_user.role == "admin"
+                    or current_user.is_superuser
+                ):
+                    document.kb_id = target_kb_uuid
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"批量移动完成，成功: {success_count}，失败: {failed_count}",
+            "data": {
+                "success_count": success_count,
+                "failed_count": failed_count
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量移动文档失败: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="批量移动文档失败")

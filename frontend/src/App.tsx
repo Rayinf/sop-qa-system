@@ -7,7 +7,8 @@ import MainLayout from './components/Layout/MainLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import QA from './pages/QA'
-import Documents from './pages/Documents'
+import UnifiedKnowledgeManagement from './pages/UnifiedKnowledgeManagement'
+
 import Profile from './pages/Profile'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
@@ -50,7 +51,8 @@ const App: React.FC = () => {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="qa" element={<QA />} />
-        <Route path="documents" element={<Documents />} />
+        <Route path="knowledge" element={<UnifiedKnowledgeManagement />} />
+
         <Route path="profile" element={<Profile />} />
         <Route path="admin" element={<Admin />} />
         <Route path="settings" element={<Settings />} />

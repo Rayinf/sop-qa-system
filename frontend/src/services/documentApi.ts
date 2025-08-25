@@ -14,22 +14,23 @@ class DocumentApiService {
   private baseUrl = '/api/v1/documents'
 
   // 获取文档列表
-  async getDocuments(params?: SearchParams): Promise<PaginatedResponse<Document>> {
+  async getDocuments(params?: SearchParams & { kb_id?: string }): Promise<PaginatedResponse<Document>> {
     const queryParams = new URLSearchParams()
-    if (params?.query) queryParams.append('query', params.query)
+    if (params?.query) queryParams.append('search', params.query)
     if (params?.category) queryParams.append('category', params.category)
     if (params?.status) queryParams.append('status', params.status)
     if (params?.start_date) queryParams.append('start_date', params.start_date)
     if (params?.end_date) queryParams.append('end_date', params.end_date)
+    if (params?.kb_id) queryParams.append('kb_id', params.kb_id)
     
     const url = queryParams.toString() ? `${this.baseUrl}?${queryParams.toString()}` : this.baseUrl
     return ApiService.get<PaginatedResponse<Document>>(url)
   }
 
   // 获取单个文档
-  async getDocument(id: number): Promise<Document> {
+  async getDocument(id: string | number): Promise<Document> {
     return ApiService.get<Document>(
-      `${this.baseUrl}/${id}`
+      `${this.baseUrl}/${String(id)}`
     )
   }
 
@@ -37,7 +38,8 @@ class DocumentApiService {
   async uploadDocument(
     file: File,
     metadata?: Record<string, any>,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    kbId?: string
   ): Promise<Document> {
     // 构建查询参数
     const queryParams = new URLSearchParams()
@@ -47,6 +49,10 @@ class DocumentApiService {
           queryParams.append(key, String(metadata[key]))
         }
       })
+    }
+    // 添加知识库ID参数
+    if (kbId) {
+      queryParams.append('kb_id', kbId)
     }
     
     const url = `${this.baseUrl}/upload${queryParams.toString() ? '?' + queryParams.toString() : ''}`
@@ -60,34 +66,34 @@ class DocumentApiService {
   }
 
   // 更新文档
-  async updateDocument(id: number, data: DocumentUpdate): Promise<Document> {
+  async updateDocument(id: string | number, data: DocumentUpdate): Promise<Document> {
     return ApiService.put<Document>(
-      `${this.baseUrl}/${id}`,
+      `${this.baseUrl}/${String(id)}`,
       data
     )
   }
 
   // 删除文档
-  async deleteDocument(id: number): Promise<void> {
+  async deleteDocument(id: string | number): Promise<void> {
     await ApiService.delete<void>(
-      `${this.baseUrl}/${id}`
+      `${this.baseUrl}/${String(id)}`
     )
   }
 
   // 获取文档块
-  async getDocumentChunks(id: number): Promise<DocumentChunk[]> {
+  async getDocumentChunks(id: string | number): Promise<DocumentChunk[]> {
     return ApiService.get<DocumentChunk[]>(
-      `${this.baseUrl}/${id}/chunks`
+      `${this.baseUrl}/${String(id)}/chunks`
     )
   }
 
   // 向量化文档
-  async vectorizeDocument(id: number): Promise<{ task_id: string }> {
+  async vectorizeDocument(id: string | number): Promise<{ task_id: string }> {
     return ApiService.post<{ task_id: string }>(`${this.baseUrl}/${String(id)}/vectorize`, {})
   }
 
   // 获取向量化进度
-  async getVectorizationProgress(id: number): Promise<{
+  async getVectorizationProgress(id: string | number): Promise<{
     document_id: string;
     status: string;
     progress: number;
@@ -154,12 +160,12 @@ class DocumentApiService {
   }
 
   // 下载文档
-  async downloadDocument(id: number): Promise<void> {
-    return ApiService.download(`${this.baseUrl}/${id}/download`)
+  async downloadDocument(id: string | number): Promise<void> {
+    return ApiService.download(`${this.baseUrl}/${String(id)}/download`)
   }
 
   // 获取文档内容预览
-  async getDocumentContent(id: number): Promise<{
+  async getDocumentContent(id: string | number): Promise<{
     document_id: string
     total_chunks: number
     chunks: Array<{
@@ -180,7 +186,29 @@ class DocumentApiService {
         page_number?: number
         metadata?: any
       }>
-    }>(`${this.baseUrl}/${id}/chunks`)
+    }>(`${this.baseUrl}/${String(id)}/chunks`)
+  }
+
+  // 移动文档到知识库
+  async moveDocumentToKb(documentId: string, kbId: string): Promise<Document> {
+    return ApiService.patch<Document>(
+      `${this.baseUrl}/${documentId}/move-to-kb?kb_id=${kbId}`
+    )
+  }
+
+  // 批量移动文档到知识库
+  async batchMoveDocumentsToKb(documentIds: string[], kbId: string): Promise<{
+    success_count: number
+    failed_count: number
+  }> {
+    const response = await ApiService.post<any>(
+      `${this.baseUrl}/batch/move-to-kb`,
+      {
+        document_ids: documentIds,
+        kb_id: kbId
+      }
+    )
+    return response.data
   }
 }
 

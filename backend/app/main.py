@@ -105,8 +105,11 @@ async def lifespan(app: FastAPI):
         # 清理资源
         if hasattr(app.state, 'vector_service'):
             # 保存向量数据库
-            app.state.vector_service.save_vector_store()
-            logger.info("向量数据库已保存")
+            if getattr(app.state.vector_service, 'vector_store', None) is not None:
+                app.state.vector_service.save_vector_store(app.state.vector_service.vector_store)
+                logger.info("向量数据库已保存")
+            else:
+                logger.info("未检测到内存中的向量数据库实例，跳过保存")
         
         logger.info("应用关闭完成")
         

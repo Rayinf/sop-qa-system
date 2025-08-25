@@ -4,6 +4,7 @@ import logging
 import numpy as np
 from datetime import datetime, timezone
 import threading
+import inspect
 
 # 禁用tqdm进度条以避免在向量化过程中卡住
 os.environ['TQDM_DISABLE'] = '1'
@@ -317,6 +318,11 @@ class VectorService:
             # 清空向量存储缓存，强制重新加载
             self._vector_store = None
             logger.info(f"✅ embedding模式切换完成: {new_mode}")
+            # 通知向量库相关组件刷新（触发问答链重建、清理缓存）
+            try:
+                self._notify_vector_store_updated()
+            except Exception as e:
+                logger.warning(f"通知向量库更新事件失败: {e}")
     
     def _get_vector_path_for_mode(self, mode: str) -> str:
         """根据embedding模式获取向量存储路径"""
@@ -334,6 +340,35 @@ class VectorService:
         if self.redis_client is None:
             self.redis_client = get_redis_client()
         return self.redis_client
+
+    def _bump_vector_store_version(self):
+        """增加向量库版本号（用于通知其他服务刷新检索器/缓存）"""
+        try:
+            client = self.get_redis_client()
+            if client:
+                client.incr("vector_store:version")
+        except Exception as e:
+            logger.warning(f"更新向量库版本号失败: {e}")
+
+    def _clear_qa_answer_cache(self, pattern: str = "qa_answer:*") -> int:
+        """清除QA答案缓存"""
+        try:
+            client = self.get_redis_client()
+            if client:
+                keys = client.keys(pattern)
+                if keys:
+                    return client.delete(*keys)
+            return 0
+        except Exception as e:
+            logger.warning(f"清除QA答案缓存失败: {e}")
+            return 0
+
+    def _notify_vector_store_updated(self):
+        """向量库更新后通知：提升版本并清理QA缓存"""
+        self._bump_vector_store_version()
+        deleted = self._clear_qa_answer_cache()
+        if deleted:
+            logger.info(f"向量库更新后已清理 {deleted} 个QA答案缓存")
     
     @property
     def vector_store(self) -> Optional[FAISS]:
@@ -357,11 +392,29 @@ class VectorService:
                 logger.info(f"📄 找到向量索引文件: {index_file}")
                 logger.info("⚙️ 正在反序列化向量数据库...")
                 
-                vector_store = FAISS.load_local(
-                    index_path, 
-                    self._langchain_embeddings,
-                    allow_dangerous_deserialization=True
-                )
+                # 兼容不同版本的 LangChain：老版本没有 allow_dangerous_deserialization 参数
+                load_kwargs = {}
+                try:
+                    sig = inspect.signature(FAISS.load_local)
+                    if "allow_dangerous_deserialization" in sig.parameters:
+                        load_kwargs["allow_dangerous_deserialization"] = True
+                except Exception:
+                    # 签名检查失败则不传该参数
+                    pass
+
+                try:
+                    vector_store = FAISS.load_local(
+                        index_path,
+                        self._langchain_embeddings,
+                        **load_kwargs,
+                    )
+                except TypeError as te:
+                    # 向后兼容：如果报 unexpected keyword argument，则回退为不带该参数
+                    if "allow_dangerous_deserialization" in str(te):
+                        logger.warning("当前 LangChain 版本不支持 allow_dangerous_deserialization，自动回退为安全加载模式")
+                        vector_store = FAISS.load_local(index_path, self._langchain_embeddings)
+                    else:
+                        raise
                 
                 # 获取向量数据库统计信息
                 total_vectors = vector_store.index.ntotal
@@ -431,6 +484,12 @@ class VectorService:
                 else:
                     logger.warning("⚠️ 向量数据库重新加载失败，使用当前实例")
                     self._vector_store = vector_store
+
+                # 通知相关组件向量库已更新（提升版本并清理QA答案缓存）
+                try:
+                    self._notify_vector_store_updated()
+                except Exception as e:
+                    logger.warning(f"向量库更新通知失败: {e}")
             else:
                 logger.warning("⚠️ 保存完成但未找到索引文件")
                 
@@ -490,131 +549,139 @@ class VectorService:
     def add_documents_to_vector_store(self, 
                                      documents: List[Document],
                                      document_id: str) -> Tuple[bool, Optional[List[List[float]]]]:
-        """将文档添加到向量数据库（一次性计算嵌入，重建索引，并返回本批新文档的嵌入）"""
+        """增量将新文档片段添加到向量数据库（只计算新片段嵌入，不重建索引）"""
         try:
-            logger.info(f"📚 开始添加文档到向量数据库: {document_id}")
-            logger.info(f"📄 文档片段数量: {len(documents)}")
-            
-            # 更新进度：准备文档元数据
+            logger.info(f"📚 开始增量添加文档到向量数据库: {document_id}")
+            logger.info(f"📄 原始片段数量: {len(documents)}")
+
+            # 进度：准备元数据
             self.update_vectorization_progress(document_id, {
                 "document_id": document_id,
                 "status": "processing",
-                "progress": 30,
+                "progress": 20,
                 "current_step": "准备文档数据",
                 "total_steps": 4,
                 "current_step_index": 1,
                 "message": f"正在准备 {len(documents)} 个文档片段的元数据",
                 "error": None
             })
-            
-            # 为每个文档添加document_id到元数据
+
+            # 确保每个片段都带有 document_id
             for i, doc in enumerate(documents):
                 doc.metadata['document_id'] = document_id
-                if i % 1000 == 0:  # 每1000个片段记录一次进度
+                if i % 1000 == 0:
                     logger.info(f"📝 处理文档片段进度: {i+1}/{len(documents)}")
-            
-            # 使用标题/类别前缀构造用于嵌入的文本
+
+            # 构造前缀文本
             prefixed_docs = [
                 Document(page_content=self._build_prefixed_text(doc), metadata=doc.metadata)
                 for doc in documents
             ]
-            
-            # 更新进度：收集现有文档
-            self.update_vectorization_progress(document_id, {
-                "document_id": document_id,
-                "status": "processing",
-                "progress": 40,
-                "current_step": "收集现有文档",
-                "total_steps": 4,
-                "current_step_index": 1,
-                "message": "正在收集现有向量数据库中的文档",
-                "error": None
-            })
-            
-            # 收集现有文档（用于整体重建）
-            existing_docs = []
-            if self.vector_store is not None:
-                logger.info("🔄 重建向量数据库（包含新文档）...")
+
+            # 加载（或懒加载）现有向量库
+            vector_store = self.vector_store  # 触发加载
+
+            # 过滤已存在的片段（根据 chunk_id 去重，只添加新块）
+            existing_chunk_ids: set = set()
+            if vector_store is not None:
                 try:
-                    if hasattr(self.vector_store, "docstore") and hasattr(self.vector_store.docstore, "_dict"):
-                        existing_docs = list(self.vector_store.docstore._dict.values())
+                    if hasattr(vector_store, "docstore") and hasattr(vector_store.docstore, "_dict"):
+                        for _id, _doc in vector_store.docstore._dict.items():
+                            cid = (_doc.metadata or {}).get('chunk_id')
+                            if cid:
+                                existing_chunk_ids.add(cid)
                 except Exception as e:
-                    logger.warning(f"⚠️ 获取现有文档失败，将仅使用新增文档: {e}")
-            else:
-                logger.info("🆕 创建新的向量数据库...")
-            logger.info(f"📚 现有文档数量: {len(existing_docs)}")
-            
-            # 合并现有文档和新文档
-            all_docs = existing_docs + prefixed_docs
-            logger.info(f"📊 总文档数量: {len(all_docs)} (现有: {len(existing_docs)}, 新增: {len(prefixed_docs)})")
-            
-            # 更新进度：计算嵌入向量
+                    logger.warning(f"⚠️ 读取现有片段失败，跳过去重: {e}")
+
+            new_docs: List[Document] = []
+            skipped = 0
+            for d in prefixed_docs:
+                cid = d.metadata.get('chunk_id')
+                if cid and cid in existing_chunk_ids:
+                    skipped += 1
+                    continue
+                new_docs.append(d)
+
+            logger.info(f"📊 新片段数量: {len(new_docs)}（跳过已存在: {skipped}）")
+
+            if len(new_docs) == 0:
+                logger.info("✅ 没有需要新增的片段，向量库保持不变")
+                return True, []
+
+            # 进度：计算新片段嵌入
             self.update_vectorization_progress(document_id, {
                 "document_id": document_id,
                 "status": "processing",
-                "progress": 50,
-                "current_step": "计算嵌入向量",
+                "progress": 45,
+                "current_step": "计算新片段嵌入",
                 "total_steps": 4,
-                "current_step_index": 1,
-                "message": f"正在计算 {len(all_docs)} 个文档片段的嵌入向量",
+                "current_step_index": 2,
+                "message": f"正在计算 {len(new_docs)} 个新文档片段的嵌入向量",
                 "error": None
             })
-            
-            # 一次性计算所有将要进入索引的文本的嵌入
-            all_texts = [d.page_content for d in all_docs]
-            all_embeddings = self.create_embeddings(all_texts)
-            
-            # 验证文本和嵌入数量匹配
-            if len(all_texts) != len(all_embeddings):
-                raise ValueError(f"文本数量({len(all_texts)})与嵌入数量({len(all_embeddings)})不匹配")
-            
-            if not all_embeddings:
-                raise ValueError("未生成任何嵌入向量")
-            
-            # 更新进度：重建向量索引
+
+            new_texts = [d.page_content for d in new_docs]
+            new_metas = [d.metadata for d in new_docs]
+            new_embeddings = self.create_embeddings(new_texts)
+
+            if len(new_embeddings) != len(new_texts):
+                raise ValueError(f"新文本数量({len(new_texts)})与嵌入数量({len(new_embeddings)})不匹配")
+            if not new_embeddings:
+                raise ValueError("未生成任何新嵌入向量")
+
+            # 进度：写入向量索引
             self.update_vectorization_progress(document_id, {
                 "document_id": document_id,
                 "status": "processing",
                 "progress": 70,
-                "current_step": "重建向量索引",
+                "current_step": "写入向量索引",
                 "total_steps": 4,
-                "current_step_index": 1,
-                "message": f"正在重建包含 {len(all_docs)} 个文档的向量索引",
+                "current_step_index": 3,
+                "message": f"正在将 {len(new_docs)} 个新片段写入向量索引",
                 "error": None
             })
-            
-            # 使用 from_embeddings 构建/重建索引，并附带元数据
-            all_metas = [d.metadata for d in all_docs]
-            text_embedding_pairs = list(zip(all_texts, all_embeddings))
-            vector_store = FAISS.from_embeddings(
-                text_embedding_pairs,
-                self._langchain_embeddings,
-                metadatas=all_metas
-            )
-            logger.info(f"✅ 向量数据库构建成功，包含 {len(all_docs)} 个文档片段")
-            
-            # 更新进度：保存向量数据库
+
+            if vector_store is None:
+                # 首次创建索引，仅使用新片段
+                logger.info("🆕 创建新的向量索引（仅包含新片段）...")
+                text_embedding_pairs = list(zip(new_texts, new_embeddings))
+                vector_store = FAISS.from_embeddings(
+                    text_embedding_pairs,
+                    self._langchain_embeddings,
+                    metadatas=new_metas
+                )
+                logger.info(f"✅ 新索引创建成功，包含 {len(new_docs)} 个片段")
+            else:
+                # 增量追加嵌入
+                logger.info("➕ 向现有索引增量追加新片段...")
+                text_embedding_pairs = list(zip(new_texts, new_embeddings))
+                # 使用 add_embeddings 避免对新片段再次计算嵌入
+                vector_store.add_embeddings(
+                    text_embedding_pairs,
+                    metadatas=new_metas
+                )
+                logger.info(f"✅ 追加完成，当前索引总向量数: {vector_store.index.ntotal}")
+
+            # 进度：保存向量库
             self.update_vectorization_progress(document_id, {
                 "document_id": document_id,
                 "status": "processing",
                 "progress": 85,
                 "current_step": "保存向量数据库",
                 "total_steps": 4,
-                "current_step_index": 1,
-                "message": "正在保存重建后的向量数据库到磁盘",
+                "current_step_index": 4,
+                "message": "正在保存向量数据库到磁盘",
                 "error": None
             })
-            
-            # 保存向量数据库
+
+            # 保存并刷新内存中的引用
             self.save_vector_store(vector_store)
-            
-            # 返回本批新文档的嵌入（位于 all_embeddings 的尾部）
-            new_count = len(prefixed_docs)
-            new_embeddings = all_embeddings[-new_count:] if new_count > 0 else []
+
+            # 返回本批新文档的嵌入
             return True, new_embeddings
-            
+
         except Exception as e:
-            logger.error(f"❌ 添加文档到向量数据库失败: {e}")
+            logger.error(f"❌ 增量添加文档到向量数据库失败: {e}")
             return False, None
 
 
@@ -801,13 +868,15 @@ class VectorService:
                                 query: str, 
                                 k: int = None,
                                 score_threshold: float = None,
-                                filter_dict: Optional[Dict[str, Any]] = None) -> List[Tuple[Document, float]]:
+                                filter_dict: Optional[Dict[str, Any]] = None,
+                                active_kb_ids: Optional[List[str]] = None) -> List[Tuple[Document, float]]:
         """搜索相似文档
         Args:
             query: 查询文本
             k: 返回文档数量，默认读取 settings.retrieval_k
-            score_threshold: 相似度阈值，低于该阈值的文档将被过滤（注意：此处的分数定义为“相似度”，越大越相似）
+            score_threshold: 相似度阈值，低于该阈值的文档将被过滤（注意：此处的分数定义为"相似度"，越大越相似）
             filter_dict: 额外过滤条件（例如 {"category": "manual"}），会直接传递给 FAISS 的 filter 参数
+            active_kb_ids: 激活的知识库ID列表，用于限制搜索范围
         Returns:
             (Document, similarity) 列表，分数为相似度（cosine，相似度越大越相关）
         """
@@ -855,8 +924,23 @@ class VectorService:
                 logger.info(f"📋 基础召回: {len(docs_with_scores)} 个文档")
             
             # 手动应用过滤器（基于metadata）
+            filters_applied = []
+            
+            # 应用知识库过滤
+            if active_kb_ids:
+                logger.info(f"🎯 应用知识库过滤器: {active_kb_ids}")
+                kb_filtered_docs = []
+                for doc, raw_score in docs_with_scores:
+                    doc_kb_id = doc.metadata.get('kb_id')
+                    if doc_kb_id and str(doc_kb_id) in [str(kb_id) for kb_id in active_kb_ids]:
+                        kb_filtered_docs.append((doc, raw_score))
+                docs_with_scores = kb_filtered_docs
+                filters_applied.append(f"知识库: {len(active_kb_ids)}个")
+                logger.info(f"📋 知识库过滤后候选: {len(docs_with_scores)} 个文档")
+            
+            # 应用其他过滤器
             if filter_dict:
-                logger.info(f"🔄 应用手动过滤器: {filter_dict}")
+                logger.info(f"🔄 应用其他过滤器: {filter_dict}")
                 filtered_docs_with_scores = []
                 for doc, raw_score in docs_with_scores:
                     match = True
@@ -867,7 +951,11 @@ class VectorService:
                     if match:
                         filtered_docs_with_scores.append((doc, raw_score))
                 docs_with_scores = filtered_docs_with_scores
-                logger.info(f"📋 过滤后候选: {len(docs_with_scores)} 个文档")
+                filters_applied.append(f"其他: {len(filter_dict)}个条件")
+                logger.info(f"📋 其他过滤后候选: {len(docs_with_scores)} 个文档")
+            
+            if filters_applied:
+                logger.info(f"✅ 过滤器应用完成: {', '.join(filters_applied)}")
             
             # 限制候选数量到原始k值
             docs_with_scores = docs_with_scores[:k]

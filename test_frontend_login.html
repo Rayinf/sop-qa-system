@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端登录测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 3px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>前端登录和知识库API测试</h1>
+    
+    <div class="test-section">
+        <h2>1. 测试登录功能</h2>
+        <button onclick="testLogin()">测试登录</button>
+        <div id="loginResult"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. 测试知识库API</h2>
+        <button onclick="testKnowledgeBaseAPI()">测试知识库API</button>
+        <div id="kbResult"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. 检查认证状态</h2>
+        <button onclick="checkAuthStatus()">检查认证状态</button>
+        <div id="authResult"></div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000';
+        
+        function showResult(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="result ${type}">${message}</div>`;
+        }
+        
+        function showJsonResult(elementId, data, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="result ${type}"><pre>${JSON.stringify(data, null, 2)}</pre></div>`;
+        }
+        
+        async function testLogin() {
+            try {
+                showResult('loginResult', '正在测试登录...', 'info');
+                
+                const formData = new FormData();
+                formData.append('username', 'admin@example.com');
+                formData.append('password', 'admin123456');
+                
+                const response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('auth-token', data.access_token);
+                    localStorage.setItem('auth-refresh-token', data.refresh_token);
+                    showJsonResult('loginResult', {
+                        message: '✅ 登录成功！',
+                        token: data.access_token.substring(0, 20) + '...',
+                        user: data.user
+                    }, 'success');
+                } else {
+                    const error = await response.text();
+                    showResult('loginResult', `❌ 登录失败: ${error}`, 'error');
+                }
+            } catch (error) {
+                showResult('loginResult', `❌ 登录错误: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testKnowledgeBaseAPI() {
+            try {
+                showResult('kbResult', '正在测试知识库API...', 'info');
+                
+                const token = localStorage.getItem('auth-token');
+                if (!token) {
+                    showResult('kbResult', '❌ 请先登录获取认证token', 'error');
+                    return;
+                }
+                
+                const response = await fetch(`${API_BASE_URL}/api/v1/kb`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showJsonResult('kbResult', {
+                        message: '✅ 知识库API调用成功！',
+                        data: data
+                    }, 'success');
+                } else {
+                    const error = await response.text();
+                    showResult('kbResult', `❌ 知识库API失败: ${response.status} - ${error}`, 'error');
+                }
+            } catch (error) {
+                showResult('kbResult', `❌ 知识库API错误: ${error.message}`, 'error');
+            }
+        }
+        
+        async function checkAuthStatus() {
+            try {
+                const token = localStorage.getItem('auth-token');
+                const refreshToken = localStorage.getItem('auth-refresh-token');
+                
+                const authStatus = {
+                    hasToken: !!token,
+                    hasRefreshToken: !!refreshToken,
+                    tokenPreview: token ? token.substring(0, 20) + '...' : null,
+                    localStorage: {
+                        'auth-token': token ? 'present' : 'missing',
+                        'auth-refresh-token': refreshToken ? 'present' : 'missing'
+                    }
+                };
+                
+                if (token) {
+                    // 测试token是否有效
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        
+                        if (response.ok) {
+                            const user = await response.json();
+                            authStatus.tokenValid = true;
+                            authStatus.currentUser = user;
+                        } else {
+                            authStatus.tokenValid = false;
+                            authStatus.error = `Token验证失败: ${response.status}`;
+                        }
+                    } catch (error) {
+                        authStatus.tokenValid = false;
+                        authStatus.error = `Token验证错误: ${error.message}`;
+                    }
+                }
+                
+                showJsonResult('authResult', authStatus, authStatus.tokenValid ? 'success' : 'error');
+            } catch (error) {
+                showResult('authResult', `❌ 检查认证状态错误: ${error.message}`, 'error');
+            }
+        }
+        
+        // 页面加载时自动检查认证状态
+        window.onload = function() {
+            checkAuthStatus();
+        };
+    </script>
+</body>
+</html>

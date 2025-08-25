@@ -47,12 +47,19 @@ class Settings(BaseSettings):
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = "admin123456"
     
-    # LLM Provider (DeepSeek/OpenAI)
+    # LLM Provider (DeepSeek/OpenAI/Kimi)
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     deepseek_temperature: float = 0.3
     deepseek_max_tokens: int = 2000
+    
+    # Kimi API Configuration
+    kimi_api_key: Optional[str] = "sk-oGiE4vyB6H21XOdVpsPiW1FdM3TnR0ERvCFqbKq3pK2Gc6sR"
+    kimi_base_url: str = "https://api.moonshot.cn/v1"
+    kimi_model: str = "kimi-k2-0711-preview"
+    kimi_temperature: float = 0.6
+    kimi_max_tokens: int = 2000
     
     # Embedding Configuration
     embedding_mode: str = "api"  # "api" or "local"
@@ -69,7 +76,7 @@ class Settings(BaseSettings):
     local_embedding_device: str = "cpu"  # "cpu" or "cuda"
     
     # Available Models
-    available_models: str = "deepseek-chat,deepseek-coder"
+    available_models: str = "deepseek-chat,deepseek-reasoner,kimi-k2-0711-preview"
     default_model: str = "deepseek-chat"
     
     # LLM Configuration (for backward compatibility)

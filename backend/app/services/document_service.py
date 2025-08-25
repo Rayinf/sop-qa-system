@@ -101,7 +101,8 @@ class DocumentService:
                         category: str,
                         tags: List[str],
                         version: str,
-                        user_id: int) -> DocumentModel:
+                        user_id: int,
+                        kb_id: Optional[str] = None) -> DocumentModel:
         """处理文档"""
         try:
             # 检查文件是否已存在（基于哈希）
@@ -122,7 +123,8 @@ class DocumentService:
                 category=category,
                 tags=tags,
                 version=version,
-                user_id=user_id
+                user_id=user_id,
+                kb_id=kb_id
             )
             
             # 保存文档到数据库
@@ -177,12 +179,12 @@ class DocumentService:
             
             if success:
                 logger.info(f"文档向量化成功: {document_id}")
-                # 更新处理状态为completed
-                self.document_processor.update_processing_status(db, document_id, "completed")
+                # 更新状态为已向量化
+                self.document_processor.update_document_status(db, document_id, "vectorized")
             else:
                 logger.error(f"文档向量化失败: {document_id}")
-                # 更新处理状态为failed
-                self.document_processor.update_processing_status(db, document_id, "failed")
+                # 更新状态为失败
+                self.document_processor.update_document_status(db, document_id, "failed")
             
             return success
             
@@ -194,7 +196,8 @@ class DocumentService:
                              db: Session,
                              file: UploadFile,
                              document_data: DocumentCreate,
-                             user_id: int) -> DocumentResponse:
+                             user_id: int,
+                             kb_id: Optional[str] = None) -> DocumentResponse:
         """创建文档（完整流程）"""
         try:
             # 1. 上传文件
@@ -215,16 +218,11 @@ class DocumentService:
                 category=document_data.category,
                 tags=document_data.tags or [],
                 version=document_data.version,
-                user_id=user_id
+                user_id=user_id,
+                kb_id=kb_id
             )
             
-            # 3. 异步向量化（可选择同步或异步）
-            if settings.auto_vectorize:
-                vectorize_success = self.vectorize_document(db, document.id)
-                if not vectorize_success:
-                    logger.warning(f"文档 {document.id} 向量化失败，但文档已创建")
-            
-            # 4. 返回文档信息
+            # 3. 返回文档信息（向量化将通过后台任务异步执行）
             return self.get_document_response(document)
             
         except Exception as e:
@@ -248,7 +246,8 @@ class DocumentService:
                      category: Optional[str] = None,
                      status: Optional[str] = None,
                      user_id: Optional[int] = None,
-                     search_query: Optional[str] = None) -> Tuple[List[DocumentModel], int]:
+                     search_query: Optional[str] = None,
+                     kb_id: Optional[str] = None) -> Tuple[List[DocumentModel], int]:
         """获取文档列表"""
         try:
             query = db.query(DocumentModel)
@@ -262,6 +261,9 @@ class DocumentService:
             
             if user_id:
                 query = query.filter(DocumentModel.uploaded_by == user_id)
+            
+            if kb_id:
+                query = query.filter(DocumentModel.kb_id == kb_id)
             
             if search_query:
                 search_filter = or_(
@@ -479,7 +481,6 @@ class DocumentService:
             version=document.version,
             status=document.status,
             uploaded_by=document.uploaded_by,
-            processing_status=document.processing_status,
             processing_error=document.processing_error,
             category=document.category,
             tags=document.tags,

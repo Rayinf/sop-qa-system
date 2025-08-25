@@ -49,8 +49,7 @@ def init_vector_database():
             file_size=len(content.encode('utf-8')),
             file_type="text/plain",
             category="manual",
-            status="active",
-            processing_status="pending",
+            status="uploaded",
             uploaded_by=None
         )
         

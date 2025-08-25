@@ -51,8 +51,7 @@ export interface Document {
   file_type: string
   category?: string
   description?: string
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'vectorized' | 'vectorizing'
-  processing_status: 'pending' | 'processing' | 'completed' | 'failed' | 'vectorizing'
+  status: 'uploaded' | 'processing' | 'processed' | 'vectorizing' | 'vectorized' | 'failed' | 'error'
   is_vectorized: boolean
   chunk_count: number
   upload_user_id: number
@@ -60,6 +59,7 @@ export interface Document {
   created_at: string
   updated_at: string
   file_hash: string
+  kb_id?: string
 }
 
 export interface DocumentCreate {
@@ -73,7 +73,8 @@ export interface DocumentUpdate {
   title?: string
   category?: string
   description?: string
-  status?: 'pending' | 'processing' | 'completed' | 'failed'
+  status?: 'uploaded' | 'processing' | 'processed' | 'vectorizing' | 'vectorized' | 'failed' | 'error'
+  kb_id?: string
 }
 
 export interface DocumentChunk {
@@ -91,16 +92,20 @@ export interface QuestionRequest {
   category?: string
   session_id?: string
   context?: string
-  use_multi_retrieval?: boolean
+  active_kb_ids?: string[]
   overrides?: Record<string, any>
 }
 
 export interface SourceDocument {
   document_id: number
   document_title: string
+  chunk_id: string
   chunk_content: string
   similarity_score: number
   metadata: Record<string, any>
+  kb_id?: string
+  kb_name?: string
+  page_number?: number
 }
 
 export interface FormattedAnswer {
@@ -153,6 +158,9 @@ export interface QAItem {
     chunk_id: string
     relevance_score: number
     content: string
+    kb_id?: string
+    kb_name?: string
+    page_number?: number
   }>
   processing_time: number
   type: 'question' | 'answer'
@@ -183,6 +191,13 @@ export interface PaginatedResponse<T> {
   page: number
   size: number
   pages: number
+}
+
+export interface KnowledgeBasePaginatedResponse {
+  kbs: KnowledgeBase[]
+  total: number
+  page: number
+  size: number
 }
 
 export interface PaginationParams {
@@ -331,4 +346,41 @@ export interface HealthCheck {
     redis: string
   }
   version: string
+}
+
+// 知识库相关类型
+export interface KnowledgeBase {
+  id: string
+  name: string
+  code: string
+  description?: string
+  category?: string
+  is_active: boolean
+  document_count: number
+  created_by: number
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeBaseCreate {
+  name: string
+  code: string
+  description?: string
+  category?: string
+  is_active?: boolean
+}
+
+export interface KnowledgeBaseUpdate {
+  name?: string
+  description?: string
+  category?: string
+  is_active?: boolean
+}
+
+export interface KnowledgeBaseSelector {
+  selectedKbIds: string[]
+  onSelectionChange: (kbIds: string[]) => void
+  placeholder?: string
+  maxCount?: number
+  disabled?: boolean
 }
