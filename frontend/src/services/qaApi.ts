@@ -49,6 +49,13 @@ class QAApiService {
     )
   }
 
+  // 删除问答历史记录
+  async deleteQAHistory(qaLogId: string): Promise<void> {
+    await ApiService.delete<void>(
+      `${this.baseUrl}/history/${qaLogId}`
+    )
+  }
+
   // 提交反馈
   async submitFeedback(feedback: FeedbackRequest): Promise<void> {
     await ApiService.post<void>(
@@ -106,7 +113,7 @@ class QAApiService {
   }
 
   // 获取向量搜索日志
-  async getVectorSearchLogs(question: string): Promise<{
+  async getVectorSearchLogs(question: string, activeKbIds?: string[]): Promise<{
     logs: Array<{
       timestamp: string
       level: string
@@ -116,6 +123,12 @@ class QAApiService {
     status: string
     total_logs: number
   }> {
+    const params = new URLSearchParams({
+      question: question
+    })
+    if (activeKbIds && activeKbIds.length > 0) {
+      params.append('active_kb_ids', activeKbIds.join(','))
+    }
     return ApiService.get<{
       logs: Array<{
         timestamp: string
@@ -125,7 +138,7 @@ class QAApiService {
       }>
       status: string
       total_logs: number
-    }>(`${this.baseUrl}/vector-logs?question=${encodeURIComponent(question)}`)
+    }>(`${this.baseUrl}/vector-logs?${params.toString()}`)
   }
 
   // 批量提问（管理员功能）

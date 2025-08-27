@@ -73,11 +73,11 @@ const QA = ({ user }: QAProps) => {
   const [vectorLogsVisible, setVectorLogsVisible] = useState(false)
   const [vectorLogsLoading, setVectorLogsLoading] = useState(false)
   const [advancedRetrievalSettings, setAdvancedRetrievalSettings] = useState({
-    useEnsemble: false, // 默认关闭，需要手动开启
+    useEnsemble: false, // 默认关闭，与后端auto_prefer_ensemble_for_important: false一致
     useParentDocument: false, // 默认关闭
-    useMultiQuery: false, // 默认关闭，根据配置auto_prefer_multi_query_for_complex: false
-    useContextualCompression: true, // 默认开启，通常有助于提升质量
-    retrievalMode: 'auto' // auto, vector, hybrid, multi_query, ensemble
+    useMultiQuery: false, // 默认关闭，与后端auto_prefer_multi_query_for_complex: false一致
+    useContextualCompression: false, // 默认关闭，与后端保持一致
+    retrievalMode: 'auto' // auto, vector, hybrid, ensemble，与后端retrieval_mode: "auto"一致
   })
   
   // 模型切换相关状态
@@ -262,7 +262,7 @@ const QA = ({ user }: QAProps) => {
       // 获取向量搜索日志
       setVectorLogsLoading(true)
       try {
-        const vectorLogsResponse = await qaApi.getVectorSearchLogs(currentQuestion)
+        const vectorLogsResponse = await qaApi.getVectorSearchLogs(currentQuestion, selectedKbIds)
         setVectorLogs(vectorLogsResponse.logs)
         setVectorLogsVisible(true)
       } catch (vectorError) {
@@ -276,24 +276,24 @@ const QA = ({ user }: QAProps) => {
       
       // 添加高级检索设置到 overrides
       if (advancedRetrievalSettings.retrievalMode !== 'auto') {
-        overrides.mode = advancedRetrievalSettings.retrievalMode
+        // 使用后端明确支持的retrievalMode键（后端会解析字符串到枚举）
+        overrides.retrievalMode = advancedRetrievalSettings.retrievalMode
       }
       
-      if (advancedRetrievalSettings.useEnsemble) {
-        overrides.use_ensemble = true
-      }
-      
-      if (advancedRetrievalSettings.useParentDocument) {
-        overrides.use_parent_document = true
-      }
-      
-      if (advancedRetrievalSettings.useMultiQuery) {
-        overrides.use_multi_query = true
-      }
-      
-      if (advancedRetrievalSettings.useContextualCompression) {
-        overrides.use_contextual_compression = true
-      }
+      // 说明：以下高级开关目前后端统一检索服务未识别use_*覆盖项，
+      // 因此不再下发这些无效的覆盖，避免前后端配置不一致。
+      // if (advancedRetrievalSettings.useEnsemble) {
+      //   overrides.use_ensemble = true
+      // }
+      // if (advancedRetrievalSettings.useParentDocument) {
+      //   overrides.use_parent_document = true
+      // }
+      // if (advancedRetrievalSettings.useMultiQuery) {
+      //   overrides.use_multi_query = true
+      // }
+      // if (advancedRetrievalSettings.useContextualCompression) {
+      //   overrides.use_contextual_compression = true
+      // }
       
       const request: QuestionRequest = {
         question: currentQuestion,
@@ -334,7 +334,8 @@ const QA = ({ user }: QAProps) => {
           content: doc.content || doc.chunk_content,
           kb_id: doc.kb_id,
           kb_name: doc.kb_name,
-          page_number: doc.page_number
+          // 兼容后端不同字段：优先使用顶层 page_number，其次 metadata.page_number，再次 metadata.page
+          page_number: doc.page_number ?? doc.metadata?.page_number ?? doc.metadata?.page
         })),
         processing_time: response.processing_time || 0,
         type: 'answer'
@@ -417,9 +418,15 @@ const QA = ({ user }: QAProps) => {
     Modal.confirm({
       title: '确认删除',
       content: '确定要删除这条问答记录吗？',
-      onOk: () => {
-        setAllHistory(prev => prev.filter(item => item.id !== id))
-        message.success('删除成功')
+      onOk: async () => {
+        try {
+          await qaApi.deleteQAHistory(id)
+          setAllHistory(prev => prev.filter(item => item.id !== id))
+          message.success('删除成功')
+        } catch (error) {
+          console.error('删除历史记录失败:', error)
+          message.error('删除失败，请稍后重试')
+        }
       }
     })
   }
@@ -544,9 +551,9 @@ const QA = ({ user }: QAProps) => {
                                               }}
                                             >
                                               {source.document_title}
-                                              {source.page_number && (
+                                              {source.page_number !== undefined && source.page_number !== null && (
                                                 <span style={{ color: '#666', marginLeft: 4 }}>
-                                                  (第{source.page_number}页)
+                                                  (第{Math.max(1, Number(source.page_number) || 1)}页)
                                                 </span>
                                               )}
                                             </Tag>
@@ -699,27 +706,57 @@ const QA = ({ user }: QAProps) => {
                         <div style={{ width: 300 }}>
                           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                             <div>
-                              <Text type="secondary" style={{ fontSize: 12 }}>检索模式:</Text>
+                              <Space align="center" style={{ marginBottom: 4 }}>
+                                <Text type="secondary" style={{ fontSize: 12 }}>检索模式:</Text>
+                                <Tooltip title="选择不同的检索策略来匹配相关文档">
+                                  <QuestionCircleOutlined style={{ fontSize: 12, color: '#999' }} />
+                                </Tooltip>
+                              </Space>
                               <Select
                                 value={advancedRetrievalSettings.retrievalMode}
                                 onChange={(value) => setAdvancedRetrievalSettings(prev => ({ ...prev, retrievalMode: value }))}
-                                style={{ width: '100%', marginTop: 4 }}
+                                style={{ width: '100%' }}
                                 size="small"
                               >
-                                <Option value="auto">自动</Option>
-                                <Option value="vector">向量</Option>
-                                <Option value="hybrid">混合</Option>
-                                <Option value="multi_query">多查询</Option>
-                                <Option value="ensemble">集成</Option>
+                                <Option value="auto">
+                                  <Tooltip title="系统自动选择最适合的检索策略">
+                                    自动
+                                  </Tooltip>
+                                </Option>
+                                <Option value="vector">
+                                  <Tooltip title="使用向量相似度进行语义检索">
+                                    向量
+                                  </Tooltip>
+                                </Option>
+                                <Option value="hybrid">
+                                  <Tooltip title="结合关键词和语义检索，提高准确性">
+                                    混合
+                                  </Tooltip>
+                                </Option>
+                                <Option value="ensemble">
+                                  <Tooltip title="融合多种检索器结果，获得最佳匹配">
+                                    集成
+                                  </Tooltip>
+                                </Option>
                               </Select>
                             </div>
                             <Divider style={{ margin: '8px 0' }} />
                             <div>
-                              <Text type="secondary" style={{ fontSize: 12 }}>高级检索选项:</Text>
-                              <Row gutter={[8, 8]} style={{ marginTop: 4 }}>
+                              <Space align="center" style={{ marginBottom: 4 }}>
+                                <Text type="secondary" style={{ fontSize: 12 }}>高级检索选项:</Text>
+                                <Tooltip title="启用高级检索功能来提升搜索效果">
+                                  <QuestionCircleOutlined style={{ fontSize: 12, color: '#999' }} />
+                                </Tooltip>
+                              </Space>
+                              <Row gutter={[8, 8]}>
                                 <Col span={24}>
                                   <Space size="small" align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-                                    <Text style={{ fontSize: 12 }}>集成检索(Ensemble)</Text>
+                                    <Space align="center">
+                                      <Text style={{ fontSize: 12 }}>集成检索(Ensemble)</Text>
+                                      <Tooltip title="融合多个检索器的结果，通过加权平均提高检索准确性">
+                                        <QuestionCircleOutlined style={{ fontSize: 10, color: '#ccc' }} />
+                                      </Tooltip>
+                                    </Space>
                                     <Switch
                                       size="small"
                                       checked={advancedRetrievalSettings.useEnsemble}
@@ -729,7 +766,12 @@ const QA = ({ user }: QAProps) => {
                                 </Col>
                                 <Col span={24}>
                                   <Space size="small" align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-                                    <Text style={{ fontSize: 12 }}>父文档检索</Text>
+                                    <Space align="center">
+                                      <Text style={{ fontSize: 12 }}>父文档检索</Text>
+                                      <Tooltip title="检索完整的父文档而不仅仅是文档片段，提供更完整的上下文">
+                                        <QuestionCircleOutlined style={{ fontSize: 10, color: '#ccc' }} />
+                                      </Tooltip>
+                                    </Space>
                                     <Switch
                                       size="small"
                                       checked={advancedRetrievalSettings.useParentDocument}
@@ -739,7 +781,12 @@ const QA = ({ user }: QAProps) => {
                                 </Col>
                                 <Col span={24}>
                                   <Space size="small" align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-                                    <Text style={{ fontSize: 12 }}>多查询检索</Text>
+                                    <Space align="center">
+                                      <Text style={{ fontSize: 12 }}>多查询检索</Text>
+                                      <Tooltip title="生成多个相关查询来扩展搜索范围，提高召回率">
+                                        <QuestionCircleOutlined style={{ fontSize: 10, color: '#ccc' }} />
+                                      </Tooltip>
+                                    </Space>
                                     <Switch
                                       size="small"
                                       checked={advancedRetrievalSettings.useMultiQuery}
@@ -749,7 +796,12 @@ const QA = ({ user }: QAProps) => {
                                 </Col>
                                 <Col span={24}>
                                   <Space size="small" align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-                                    <Text style={{ fontSize: 12 }}>上下文压缩</Text>
+                                    <Space align="center">
+                                      <Text style={{ fontSize: 12 }}>上下文压缩</Text>
+                                      <Tooltip title="压缩检索到的文档内容，去除无关信息，提高回答质量">
+                                        <QuestionCircleOutlined style={{ fontSize: 10, color: '#ccc' }} />
+                                      </Tooltip>
+                                    </Space>
                                     <Switch
                                       size="small"
                                       checked={advancedRetrievalSettings.useContextualCompression}

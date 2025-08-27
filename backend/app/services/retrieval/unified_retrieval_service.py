@@ -13,6 +13,9 @@ from app.services.retrieval.hybrid_retriever import HybridRetriever, HybridRetri
 from app.services.retrieval.multi_query_retriever import MultiQueryRetriever, MultiQueryRetrievalConfig
 from app.services.retrieval.ensemble_retriever import EnsembleRetriever, EnsembleRetrievalConfig
 from app.core.config import settings
+# 新增导入：父文档/上下文压缩检索器封装
+from app.services.retrieval.parent_retriever import ParentRetriever
+from app.services.retrieval.compression_retriever import CompressionRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,8 @@ class RetrievalMode(Enum):
     HYBRID = "hybrid"  # 混合检索
     MULTI_QUERY = "multi_query"  # 多查询检索
     ENSEMBLE = "ensemble"  # 集成检索
+    PARENT = "parent"  # 父文档检索
+    COMPRESSION = "compression"  # 上下文压缩检索
     AUTO = "auto"  # 自动选择
 
 @dataclass
@@ -46,6 +51,10 @@ class UnifiedRetrievalConfig:
     # 集成检索配置
     ensemble_config: Optional[Dict[str, Any]] = None
     
+    # 新增：父文档/上下文压缩检索配置（预留参数位，当前无需特殊配置）
+    parent_config: Optional[Dict[str, Any]] = None
+    compression_config: Optional[Dict[str, Any]] = None
+    
     # 自动选择配置
     auto_selection_rules: Optional[Dict[str, Any]] = None
     
@@ -62,6 +71,12 @@ class UnifiedRetrievalConfig:
         
         if self.ensemble_config is None:
             self.ensemble_config = self._get_default_ensemble_config()
+        
+        # 新增：默认父文档/上下文压缩配置
+        if self.parent_config is None:
+            self.parent_config = self._get_default_parent_config()
+        if self.compression_config is None:
+            self.compression_config = self._get_default_compression_config()
         
         if self.auto_selection_rules is None:
             self.auto_selection_rules = self._get_default_auto_rules()
@@ -99,6 +114,17 @@ class UnifiedRetrievalConfig:
             "weights": [0.4, 0.3, 0.3],
             "fusion_method": "weighted_sum",
             "enable_score_normalization": True
+        }
+    
+    # 新增：默认父文档/上下文压缩配置
+    def _get_default_parent_config(self) -> Dict[str, Any]:
+        return {
+            # 预留占位，当前使用 AdvancedRetrieverService 内部默认值
+        }
+    
+    def _get_default_compression_config(self) -> Dict[str, Any]:
+        return {
+            # 预留占位，当前使用 AdvancedRetrieverService 内部默认值
         }
     
     def _get_default_auto_rules(self) -> Dict[str, Any]:
@@ -149,18 +175,37 @@ class UnifiedRetrievalService:
         start_time = time.time()
         
         try:
-            # 从 kwargs 中提取 retrievalMode 参数
+            # 从 kwargs 中提取各种配置参数
             retrieval_mode_str = kwargs.pop('retrievalMode', None)
+            retrieval_config = kwargs.pop('retrieval_config', {})
+            
+            logger.info(f"🔧 前端配置: {retrieval_config}")
+            logger.info(f"🔧 所有kwargs: {list(kwargs.keys())}")
+            
+            # 处理 retrievalMode 参数
             if retrieval_mode_str and not mode:
                 try:
                     mode = RetrievalMode(retrieval_mode_str)
+                    logger.info(f"🎯 使用retrievalMode参数指定的检索模式: {mode.value}")
                 except ValueError:
                     logger.warning(f"无效的检索模式: {retrieval_mode_str}，使用默认模式")
             
+            # 从 retrieval_config 中提取检索模式
+            if not mode and retrieval_config.get('retrieval_mode'):
+                try:
+                    mode = RetrievalMode(retrieval_config['retrieval_mode'])
+                    logger.info(f"🎯 使用前端配置指定的检索模式: {mode.value}")
+                except ValueError:
+                    logger.warning(f"无效的检索模式: {retrieval_config['retrieval_mode']}，使用默认模式")
+            
             # 确定检索模式
             actual_mode = mode or self.config.mode
+            logger.info(f"🔍 确定的检索模式: {actual_mode.value} (原始mode: {mode}, 默认mode: {self.config.mode.value})")
+            
             if actual_mode == RetrievalMode.AUTO:
-                actual_mode = self._auto_select_mode(query)
+                # 传递前端配置给自动选择方法
+                actual_mode = self._auto_select_mode(query, retrieval_config)
+                logger.info(f"🤖 自动选择的检索模式: {actual_mode.value}")
             
             # 获取检索器
             retriever = self._get_retriever(actual_mode)
@@ -176,6 +221,9 @@ class UnifiedRetrievalService:
                 result.metadata = {}
             result.metadata["retrieval_mode"] = actual_mode.value
             result.metadata["auto_selected"] = mode is None or mode == RetrievalMode.AUTO
+            result.metadata["frontend_config"] = retrieval_config  # 添加前端配置信息
+            
+            logger.info(f"✅ 检索完成: 模式={actual_mode.value}, 结果数={len(result.documents)}, 自动选择={result.metadata['auto_selected']}, 前端配置={retrieval_config}")
             
             logger.debug(f"检索完成: 模式={actual_mode.value}, 结果数={len(result.documents)}, 耗时={time.time() - start_time:.3f}s")
             
@@ -185,9 +233,22 @@ class UnifiedRetrievalService:
             logger.error(f"检索失败: {e}")
             raise
     
-    def _auto_select_mode(self, query: str) -> RetrievalMode:
+    def _auto_select_mode(self, query: str, frontend_config: Optional[Dict[str, Any]] = None) -> RetrievalMode:
         """自动选择检索模式"""
-        rules = self.config.auto_selection_rules
+        rules = self.config.auto_selection_rules.copy()
+        
+        # 如果前端传递了配置，使用前端配置覆盖默认规则
+        if frontend_config:
+            # 处理 auto_prefer_multi_query_for_complex 参数
+            if 'auto_prefer_multi_query_for_complex' in frontend_config:
+                rules['prefer_multi_query_for_complex_queries'] = frontend_config['auto_prefer_multi_query_for_complex']
+            
+            # 处理 prefer_multi_query_for_complex 参数
+            if 'prefer_multi_query_for_complex' in frontend_config:
+                rules['prefer_multi_query_for_complex_queries'] = frontend_config['prefer_multi_query_for_complex']
+            
+            logger.debug(f"前端配置覆盖: {frontend_config}")
+            logger.debug(f"更新后的规则: prefer_multi_query_for_complex_queries = {rules.get('prefer_multi_query_for_complex_queries', False)}")
         
         # 分析查询特征
         query_lower = query.lower()
@@ -206,18 +267,20 @@ class UnifiedRetrievalService:
         )
         
         # 根据规则选择模式
-        if has_complex_keywords and rules.get("prefer_multi_query_for_complex_queries", True):
+        prefer_multi_query = rules.get("prefer_multi_query_for_complex_queries", False)
+        
+        if has_complex_keywords and prefer_multi_query:
             selected_mode = RetrievalMode.MULTI_QUERY
         elif query_length < rules.get("query_length_threshold", 10) and rules.get("prefer_hybrid_for_short_queries", True):
             selected_mode = RetrievalMode.HYBRID
         elif has_technical_keywords:
             selected_mode = RetrievalMode.VECTOR
-        elif rules.get("prefer_ensemble_for_important_queries", True):
+        elif rules.get("prefer_ensemble_for_important_queries", False):
             selected_mode = RetrievalMode.ENSEMBLE
         else:
             selected_mode = RetrievalMode.VECTOR  # 默认
         
-        logger.debug(f"自动选择检索模式: {selected_mode.value} (查询长度: {query_length}, 复杂关键词: {has_complex_keywords}, 技术关键词: {has_technical_keywords})")
+        logger.debug(f"自动选择检索模式: {selected_mode.value} (查询长度: {query_length}, 复杂关键词: {has_complex_keywords}, 技术关键词: {has_technical_keywords}, 偏好多查询: {prefer_multi_query})")
         
         return selected_mode
     
@@ -287,6 +350,35 @@ class UnifiedRetrievalService:
                 )
                 return EnsembleRetriever(config, self.documents)
             
+            # 新增：父文档检索
+            elif mode == RetrievalMode.PARENT:
+                # 父文档检索目前不需要额外配置，直接使用封装检索器
+                retriever = ParentRetriever(
+                    RetrievalConfig(
+                        k=self.config.k,
+                        similarity_threshold=self.config.similarity_threshold,
+                        category=self.config.category,
+                        enable_cache=self.config.enable_cache,
+                    )
+                )
+                # 如果预先设置了文档，则注入
+                if self.documents:
+                    if hasattr(retriever, 'set_documents'):
+                        retriever.set_documents(self.documents)
+                return retriever
+            
+            # 新增：上下文压缩检索
+            elif mode == RetrievalMode.COMPRESSION:
+                retriever = CompressionRetriever(
+                    RetrievalConfig(
+                        k=self.config.k,
+                        similarity_threshold=self.config.similarity_threshold,
+                        category=self.config.category,
+                        enable_cache=self.config.enable_cache,
+                    )
+                )
+                return retriever
+            
             else:
                 raise ValueError(f"不支持的检索模式: {mode}")
                 
@@ -315,6 +407,8 @@ class UnifiedRetrievalService:
             RetrievalMode.HYBRID: "结合向量检索和关键词检索，平衡语义和字面匹配",
             RetrievalMode.MULTI_QUERY: "生成多个相关查询进行检索，提高召回率",
             RetrievalMode.ENSEMBLE: "组合多种检索策略，获得最佳检索效果",
+            RetrievalMode.PARENT: "父子文档检索：通过子块召回并返回对应父文档，减小碎片化",
+            RetrievalMode.COMPRESSION: "上下文压缩检索：使用LLM压缩筛选返回更精炼的上下文",
             RetrievalMode.AUTO: "根据查询特征自动选择最适合的检索模式"
         }
         return descriptions.get(mode, "未知模式")
@@ -377,7 +471,7 @@ class UnifiedRetrievalService:
         
         logger.info("开始预热检索器...")
         
-        for mode in [RetrievalMode.VECTOR, RetrievalMode.HYBRID, RetrievalMode.MULTI_QUERY]:
+        for mode in [RetrievalMode.VECTOR, RetrievalMode.HYBRID, RetrievalMode.MULTI_QUERY, RetrievalMode.PARENT, RetrievalMode.COMPRESSION]:
             try:
                 retriever = self._get_retriever(mode)
                 for query in sample_queries[:2]:  # 每个模式用2个查询预热

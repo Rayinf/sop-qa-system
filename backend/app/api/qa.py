@@ -214,6 +214,48 @@ def get_qa_log(
         logger.error(f"获取问答记录失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取问答记录失败: {str(e)}")
 
+@router.delete("/history/{qa_log_id}")
+def delete_qa_log(
+    qa_log_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    删除问答历史记录
+    
+    只能删除属于当前用户的记录
+    """
+    try:
+        from app.models.database import QALog
+        
+        # 查找并验证记录是否属于当前用户
+        qa_log = db.query(QALog).filter(
+            QALog.id == qa_log_id,
+            QALog.user_id == current_user.id
+        ).first()
+        
+        if not qa_log:
+            raise HTTPException(
+                status_code=404, 
+                detail="问答记录不存在或无权限删除"
+            )
+        
+        # 删除记录
+        db.delete(qa_log)
+        db.commit()
+        
+        return JSONResponse(
+            status_code=200,
+            content={"message": "删除成功"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除问答记录失败: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除问答记录失败: {str(e)}")
+
 @router.post("/feedback")
 def submit_feedback(
     feedback_request: FeedbackRequest,
@@ -585,18 +627,41 @@ def batch_qa_task(
 @router.get("/vector-logs")
 def get_vector_search_logs(
     question: str = Query(..., description="问题内容"),
+    category: Optional[str] = Query(None, description="文档类别过滤"),
+    active_kb_ids: Optional[str] = Query(None, description="激活的知识库ID列表，逗号分隔"),
+    mode: Optional[str] = Query(None, description="检索模式覆盖: vector|hybrid|multi_query|ensemble|parent|compression|auto"),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """
     获取向量搜索过程的详细日志
     
-    返回向量搜索的实时处理日志，包括：
+    模拟真实的问答流程，返回向量搜索的实时处理日志，包括：
     - 向量数据库状态
     - 搜索参数
+    - 检索策略选择
     - 搜索结果统计
     - 处理时间
     """
     try:
+        # 解析active_kb_ids参数
+        parsed_kb_ids = None
+        if active_kb_ids and active_kb_ids.strip():
+            try:
+                kb_id_strs = [kb_id.strip() for kb_id in active_kb_ids.split(',') if kb_id.strip()]
+                if kb_id_strs:  # 确保有有效的知识库ID
+                    parsed_kb_ids = [uuid.UUID(kb_id) for kb_id in kb_id_strs]
+            except ValueError as e:
+                return {
+                    "logs": [{
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "level": "ERROR",
+                        "message": "知识库ID格式错误",
+                        "details": {"error": str(e), "provided_ids": active_kb_ids}
+                    }],
+                    "status": "error",
+                    "total_logs": 1
+                }
+        
         # 获取向量服务实例
         vector_service = qa_service.vector_service
         
@@ -626,65 +691,308 @@ def get_vector_search_logs(
             }
         })
         
-        # 3. 搜索参数 - 使用配置文件中的值
-        from app.core.config import settings
-        search_params = {
-            "k": settings.retrieval_k,  # 从配置文件获取
-            "similarity_threshold": settings.similarity_threshold  # 从配置文件获取
-        }
+        # 3. 查询增强（模拟真实问答流程）
+        enhanced_query = qa_service.enhance_query(question, category)
         logs.append({
             "timestamp": datetime.utcnow().isoformat(),
-            "level": "INFO",
-            "message": "开始向量搜索",
+            "level": "DEBUG",
+            "message": "查询增强完成",
             "details": {
-                "query": question[:100] + "..." if len(question) > 100 else question,
-                "search_params": search_params
+                "original_query": question[:100] + "..." if len(question) > 100 else question,
+                "enhanced_query": enhanced_query[:100] + "..." if len(enhanced_query) > 100 else enhanced_query,
+                "category": category
             }
         })
         
-        # 4. 执行搜索并记录结果
-        try:
-            search_results = vector_service.search_similar_documents(
-                query=question,
-                k=search_params["k"],
-                score_threshold=search_params["similarity_threshold"]
-            )
-            
+        # 4. 检索策略选择（模拟真实问答流程的逻辑）
+        from app.core.config import settings
+        
+        if parsed_kb_ids:
+            # 有指定知识库ID的情况
             logs.append({
                 "timestamp": datetime.utcnow().isoformat(),
                 "level": "INFO",
-                "message": "向量搜索完成",
+                "message": "检测到指定知识库ID，选择知识库过滤检索策略",
                 "details": {
-                    "results_count": len(search_results),
-                    "search_successful": True
+                    "active_kb_ids": [str(kb_id) for kb_id in parsed_kb_ids],
+                    "strategy": "unified_retrieval" if qa_service.unified_retrieval_service else "vector_with_kb_filter",
+                    "mode_override": mode
                 }
             })
             
-            # 5. 搜索结果详情
-            if search_results:
-                for i, (doc, score) in enumerate(search_results[:3]):  # 只显示前3个结果
+            # 使用统一检索服务或向量服务的知识库过滤
+            if qa_service.unified_retrieval_service:
+                try:
+                    # 模拟统一检索服务的调用
+                    retrieval_params = {'active_kb_ids': parsed_kb_ids, **({'retrievalMode': mode} if mode else {})}
+                    retrieval_result = qa_service.unified_retrieval_service.retrieve(
+                        query=enhanced_query,
+                        category=category,
+                        **retrieval_params
+                    )
+                    
+                    search_results = [(doc, 0.8) for doc in retrieval_result.documents]  # 模拟分数
+                    retrieval_metadata = retrieval_result.metadata or {}
+                    
+                    logs.append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "level": "INFO",
+                        "message": "统一检索服务搜索完成",
+                        "details": {
+                            "results_count": len(search_results),
+                            "retrieval_mode": retrieval_metadata.get("retrieval_mode", "unknown"),
+                            "auto_selected": retrieval_metadata.get("auto_selected", False),
+                            "processing_time": retrieval_result.processing_time,
+                            "strategy_used": retrieval_result.strategy_used,
+                            "search_successful": True
+                        }
+                    })
+                    
+                    # 模式/策略详细信息
+                    mode = retrieval_metadata.get("retrieval_mode", "unknown")
+                    auto_selected = retrieval_metadata.get("auto_selected", False)
                     logs.append({
                         "timestamp": datetime.utcnow().isoformat(),
                         "level": "DEBUG",
-                        "message": f"搜索结果 {i+1}",
+                        "message": "统一检索服务-执行信息",
                         "details": {
-                            "document_id": doc.metadata.get('document_id', 'unknown'),
-                            "content_preview": doc.page_content[:100] + "...",
-                            "metadata_keys": list(doc.metadata.keys()),
-                            "similarity_score": float(score)
+                            "mode": mode,
+                            "auto_selected": auto_selected,
+                            "processing_time_sec": retrieval_result.processing_time,
+                            "strategy_used": retrieval_result.strategy_used
                         }
                     })
-            
-        except Exception as search_error:
+                    
+                    # 按检索模式输出详细元数据
+                    try:
+                        if mode == "vector":
+                            vec_meta = {k: v for k, v in retrieval_metadata.items() if k not in ["retrieval_mode", "auto_selected"]}
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: vector",
+                                "details": {
+                                    "search_type": vec_meta.get("search_type"),
+                                    "total_vectors": vec_meta.get("total_vectors"),
+                                    "original_results": vec_meta.get("original_results"),
+                                    "filtered_results": vec_meta.get("filtered_results"),
+                                    "similarity_threshold": vec_meta.get("similarity_threshold"),
+                                    "category_filter": vec_meta.get("category_filter"),
+                                    "filter_dict": vec_meta.get("filter_dict"),
+                                    "kb_filter_applied": vec_meta.get("kb_filter_applied"),
+                                    "before_kb_filter": vec_meta.get("before_kb_filter"),
+                                    "mmr_used": vec_meta.get("mmr_used"),
+                                    "mmr_k": vec_meta.get("mmr_k"),
+                                    "mmr_lambda_multiplier": vec_meta.get("mmr_lambda_multiplier")
+                                }
+                            })
+                        elif mode == "hybrid":
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: hybrid",
+                                "details": {
+                                    "fusion_method": retrieval_metadata.get("fusion_method"),
+                                    "dense_weight": retrieval_metadata.get("dense_weight"),
+                                    "sparse_weight": retrieval_metadata.get("sparse_weight"),
+                                    "dense_results": retrieval_metadata.get("dense_results"),
+                                    "sparse_results": retrieval_metadata.get("sparse_results"),
+                                    "fused_results": retrieval_metadata.get("fused_results"),
+                                    "final_results": retrieval_metadata.get("final_results"),
+                                    "reranking_used": retrieval_metadata.get("reranking_used"),
+                                    "vector_retrieval_metadata": retrieval_metadata.get("vector_retrieval_metadata")
+                                }
+                            })
+                        elif mode == "multi_query":
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: multi_query",
+                                "details": {
+                                    "original_query": retrieval_metadata.get("original_query"),
+                                    "generated_queries": retrieval_metadata.get("generated_queries"),
+                                    "num_queries": retrieval_metadata.get("num_queries"),
+                                    "docs_per_query": retrieval_metadata.get("docs_per_query"),
+                                    "total_retrieved": retrieval_metadata.get("total_retrieved"),
+                                    "after_deduplication": retrieval_metadata.get("after_deduplication"),
+                                    "final_results": retrieval_metadata.get("final_results"),
+                                    "deduplication_enabled": retrieval_metadata.get("deduplication_enabled")
+                                }
+                            })
+                        elif mode == "ensemble":
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: ensemble",
+                                "details": {
+                                    "fusion_method": retrieval_metadata.get("fusion_method"),
+                                    "num_retrievers": retrieval_metadata.get("num_retrievers"),
+                                    "retriever_types": retrieval_metadata.get("retriever_types"),
+                                    "weights": retrieval_metadata.get("weights"),
+                                    "retriever_results": retrieval_metadata.get("retriever_results"),
+                                    "fused_results": retrieval_metadata.get("fused_results"),
+                                    "final_results": retrieval_metadata.get("final_results"),
+                                    "score_normalization": retrieval_metadata.get("score_normalization"),
+                                    "min_score_threshold": retrieval_metadata.get("min_score_threshold")
+                                }
+                            })
+                        elif mode == "parent":
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: parent",
+                                "details": {
+                                    "note": retrieval_metadata.get("note"),
+                                    "frontend_config": retrieval_metadata.get("frontend_config"),
+                                    "returned_docs": len(retrieval_result.documents) if retrieval_result and getattr(retrieval_result, "documents", None) is not None else len(search_results),
+                                    "kb_filter_applied": retrieval_metadata.get("kb_filter_applied"),
+                                    "category_filter": retrieval_metadata.get("category_filter")
+                                }
+                            })
+                        elif mode == "compression":
+                            try:
+                                methods = {}
+                                for d in (retrieval_result.documents if retrieval_result and getattr(retrieval_result, "documents", None) is not None else [doc for doc, _ in search_results]):
+                                    m = (d.metadata or {}).get("compression_method")
+                                    if m:
+                                        methods[m] = methods.get(m, 0) + 1
+                            except Exception:
+                                methods = {}
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "INFO",
+                                "message": "检索模式详情: compression",
+                                "details": {
+                                    "note": retrieval_metadata.get("note"),
+                                    "frontend_config": retrieval_metadata.get("frontend_config"),
+                                    "returned_docs": len(retrieval_result.documents) if retrieval_result and getattr(retrieval_result, "documents", None) is not None else len(search_results),
+                                    "compression_methods_in_docs": methods
+                                }
+                            })
+                        else:
+                            # 未知或无模式信息
+                            logs.append({
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "level": "DEBUG",
+                                "message": "未匹配到已知检索模式的详细元数据",
+                                "details": {
+                                    "metadata_keys": list(retrieval_metadata.keys())
+                                }
+                            })
+                    except Exception as md_err:
+                        logs.append({
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "level": "WARNING",
+                            "message": "解析检索模式元数据时出现异常",
+                            "details": {"error": str(md_err)}
+                        })
+                    
+                except Exception as search_error:
+                    logs.append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "level": "ERROR",
+                        "message": "统一检索服务搜索失败",
+                        "details": {
+                            "error": str(search_error),
+                            "search_successful": False
+                        }
+                    })
+                    search_results = []
+            else:
+                try:
+                    # 使用向量服务的知识库过滤功能
+                    kb_ids_str = [str(kb_id) for kb_id in parsed_kb_ids]
+                    search_results = vector_service.search_similar_documents(
+                        query=enhanced_query,
+                        k=settings.retrieval_k,
+                        active_kb_ids=kb_ids_str
+                    )
+                    
+                    logs.append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "level": "INFO",
+                        "message": "向量服务（带知识库过滤）搜索完成",
+                        "details": {
+                            "results_count": len(search_results),
+                            "search_params": {
+                                "k": settings.retrieval_k,
+                                "similarity_threshold": settings.similarity_threshold,
+                                "active_kb_ids": kb_ids_str
+                            },
+                            "search_successful": True
+                        }
+                    })
+                    
+                except Exception as search_error:
+                    logs.append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "level": "ERROR",
+                        "message": "向量服务（带知识库过滤）搜索失败",
+                        "details": {
+                            "error": str(search_error),
+                            "search_successful": False
+                        }
+                    })
+                    search_results = []
+        else:
+            # 没有指定知识库ID的情况，使用传统向量搜索
             logs.append({
                 "timestamp": datetime.utcnow().isoformat(),
-                "level": "ERROR",
-                "message": "向量搜索失败",
+                "level": "INFO",
+                "message": "未指定知识库ID，使用传统向量搜索策略",
                 "details": {
-                    "error": str(search_error),
-                    "search_successful": False
+                    "strategy": "traditional_vector_search",
+                    "search_params": {
+                        "k": settings.retrieval_k,
+                        "similarity_threshold": settings.similarity_threshold
+                    }
                 }
             })
+            
+            try:
+                search_results = vector_service.search_similar_documents(
+                    query=enhanced_query,
+                    k=settings.retrieval_k,
+                    score_threshold=settings.similarity_threshold
+                )
+                
+                logs.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "level": "INFO",
+                    "message": "传统向量搜索完成",
+                    "details": {
+                        "results_count": len(search_results),
+                        "search_successful": True
+                    }
+                })
+                
+            except Exception as search_error:
+                logs.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "level": "ERROR",
+                    "message": "传统向量搜索失败",
+                    "details": {
+                        "error": str(search_error),
+                        "search_successful": False
+                    }
+                })
+                search_results = []
+        
+        # 5. 搜索结果详情
+        if search_results:
+            for i, (doc, score) in enumerate(search_results[:3]):  # 只显示前3个结果
+                logs.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "level": "DEBUG",
+                    "message": f"搜索结果 {i+1}",
+                    "details": {
+                        "document_id": doc.metadata.get('document_id', 'unknown'),
+                        "kb_id": doc.metadata.get('kb_id', 'unknown'),
+                        "content_preview": doc.page_content[:100] + "...",
+                        "metadata_keys": list(doc.metadata.keys()),
+                        "similarity_score": float(score) if isinstance(score, (int, float)) else 0.8
+                    }
+                })
         
         return {
             "logs": logs,

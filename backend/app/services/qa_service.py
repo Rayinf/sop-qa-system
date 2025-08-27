@@ -19,7 +19,6 @@ from app.models.schemas import (
 )
 from app.services.vector_service import VectorService
 from app.services.advanced_retriever import AdvancedRetrieverService
-from app.services.multi_retrieval_service import MultiRetrievalService
 from app.services.retrieval.unified_retrieval_service import UnifiedRetrievalService
 from app.services.retrieval.config_factory import RetrievalConfigFactory
 from app.core.database import get_redis_client, get_db
@@ -50,13 +49,7 @@ class QAService:
         except Exception as e:
             logger.warning(f"高级检索器服务初始化失败: {e}")
         
-        # 多知识库路由服务
-        self.multi_retrieval_service = None
-        try:
-            self.multi_retrieval_service = MultiRetrievalService()
-            logger.info("多知识库路由服务初始化成功")
-        except Exception as e:
-            logger.warning(f"多知识库路由服务初始化失败: {e}")
+
         
         # 初始化统一检索服务
         try:
@@ -212,7 +205,18 @@ class QAService:
                 return None
             
             # 选择检索器
-            if self.advanced_retriever:
+            # 如果有统一检索服务，优先使用基础检索器，避免与统一检索服务冲突
+            if self.unified_retrieval_service:
+                # 使用基础检索器，让统一检索服务处理高级检索逻辑
+                retriever = self.vector_service.vector_store.as_retriever(
+                    search_type="similarity_score_threshold",
+                    search_kwargs={
+                        "k": settings.retrieval_k,
+                        "score_threshold": 0.1
+                    }
+                )
+                logger.info("使用基础检索器（统一检索服务可用）")
+            elif self.advanced_retriever:
                 # 使用高级检索器
                 try:
                     retriever = self.advanced_retriever.create_ensemble_retriever()
@@ -252,7 +256,8 @@ class QAService:
             return qa_chain
             
         except Exception as e:
-            logger.error(f"创建问答链失败: {e}")
+            logger.error(f"记录问答日志失败: {e}")
+            db.rollback()
             return None
     
     def ask_question(self, 
@@ -318,9 +323,52 @@ class QAService:
             logger.info(f"📝 增强查询: '{query[:100]}{'...' if len(query) > 100 else ''}'")
             
             # 选择检索策略
-            if self.multi_retrieval_service:
-                logger.info("🔍 步骤5: 使用多知识库路由执行问答")
-                return self.ask_question_with_routing(db, question, user_id, session_id, start_time, active_kb_ids)
+            if active_kb_ids:
+                logger.info("🔍 步骤5: 检测到指定知识库ID，优先走支持知识库过滤的检索路径")
+                if self.unified_retrieval_service:
+                    logger.info("🔍 使用统一检索服务（带知识库过滤）执行问答")
+                    return self.ask_question_with_unified_retrieval(db, question, query, user_id, session_id, start_time, category, overrides, active_kb_ids)
+                else:
+                    logger.info("🔍 使用传统向量服务（带知识库过滤）执行问答")
+                    # 使用向量服务的知识库过滤功能
+                    kb_ids_str = [str(kb_id) for kb_id in active_kb_ids]
+                    docs_with_scores = self.vector_service.search_similar_documents(
+                        query=query,
+                        k=settings.retrieval_k,
+                        active_kb_ids=kb_ids_str
+                    )
+                    source_docs = [doc for doc, score in docs_with_scores]
+                    
+                    # 如果找到相关文档，使用LLM生成答案
+                    if source_docs:
+                        context = "\n\n".join([doc.page_content for doc in source_docs])
+                        prompt = f"""基于以下上下文回答问题：
+
+上下文：
+{context}
+
+问题：{question}
+
+请提供准确、详细的答案："""
+                        
+                        try:
+                            answer = self.llm.invoke(prompt).content if hasattr(self.llm.invoke(prompt), 'content') else str(self.llm.invoke(prompt))
+                        except Exception as e:
+                            logger.error(f"LLM调用失败: {e}")
+                            answer = "抱歉，在生成答案时遇到了问题。"
+                        
+                        result = {
+                            "result": answer,
+                            "source_documents": source_docs
+                        }
+                    else:
+                        logger.warning("在指定知识库中未找到相关文档")
+                        result = {
+                            "result": "抱歉，在指定的知识库中没有找到相关信息来回答您的问题。",
+                            "source_documents": []
+                        }
+                    # 继续后续处理
+                # 跳过多路由，因为其暂不支持 active_kb_ids
             elif self.unified_retrieval_service:
                 logger.info("🔍 步骤5: 使用统一检索服务执行问答")
                 return self.ask_question_with_unified_retrieval(db, question, query, user_id, session_id, start_time, category, overrides, active_kb_ids)
@@ -497,9 +545,14 @@ class QAService:
                      original_retriever = self.qa_chain.retriever
                      
                      class FixedRetriever:
-                         def get_relevant_documents(self, query):
-                             return source_docs
-                     
+                        def get_relevant_documents(self, query, *, callbacks=None, **kwargs):
+                            # 兼容LangChain Retrieval接口可能传入的callbacks或其他可选参数
+                            return source_docs
+
+                        async def aget_relevant_documents(self, query, *, callbacks=None, **kwargs):
+                            # 提供异步接口以兼容可能的异步调用
+                            return source_docs
+                    
                      self.qa_chain.retriever = FixedRetriever()
                      result = self.qa_chain({"query": query})
                      answer = result.get("result", "")
@@ -532,31 +585,64 @@ class QAService:
              # 缓存答案
              self.cache_answer(question, category, formatted_answer, source_documents)
              
-             # 记录问答日志（包含检索信息）
-             qa_log = self.log_qa_interaction(
-                 db=db,
-                 question=question,
-                 answer=formatted_answer,
-                 source_documents=source_documents,
-                 user_id=user_id,
-                 session_id=session_id,
-                 processing_time=total_processing_time
-             )
-             
-             # 如果有QA日志，添加检索信息到元数据
-             if qa_log:
-                 try:
-                     metadata = json.loads(qa_log.metadata or "{}")
-                     metadata["retrieval_info"] = {
+             # 先创建QA日志记录，但不提交
+             qa_log = None
+             try:
+                 # 序列化source_documents，确保UUID对象被转换为字符串
+                 def serialize_value(value):
+                     """递归序列化值，确保UUID和其他非JSON兼容类型被转换为字符串"""
+                     if isinstance(value, uuid.UUID):
+                         return str(value)
+                     elif isinstance(value, dict):
+                         return {k: serialize_value(v) for k, v in value.items()}
+                     elif isinstance(value, list):
+                         return [serialize_value(item) for item in value]
+                     elif hasattr(value, '__dict__'):
+                         # 对于复杂对象，尝试转换为字符串
+                         return str(value)
+                     else:
+                         return value
+                 
+                 serialized_docs = []
+                 for doc in source_documents:
+                     doc_dict = doc.dict()
+                     # 递归序列化整个文档字典
+                     serialized_doc = serialize_value(doc_dict)
+                     serialized_docs.append(serialized_doc)
+                 
+                 # 创建包含检索信息的元数据
+                 log_metadata = {
+                     'model': settings.llm_model,
+                     'temperature': settings.llm_temperature,
+                     'retrieval_k': settings.retrieval_k,
+                     'timestamp': datetime.now(timezone.utc).isoformat(),
+                     "retrieval_info": {
                         "mode": retrieval_mode,
                         "retrieval_time": processing_time_retrieval,
                         "documents_found": len(source_docs),
                         "auto_selected": retrieval_metadata.get("auto_selected", False)
                     }
-                     qa_log.metadata = json.dumps(metadata)
-                     db.commit()
-                 except Exception as e:
-                     logger.warning(f"保存检索信息到QA日志失败: {e}")
+                 }
+                 
+                 qa_log = QALog(
+                     question=question,
+                     answer=formatted_answer,
+                     user_id=user_id,
+                     session_id=session_id,
+                     retrieved_documents=serialized_docs,
+                     response_time=total_processing_time,
+                     log_metadata=log_metadata
+                 )
+                 
+                 db.add(qa_log)
+                 db.flush()  # 刷新以获取ID，但不提交事务
+                 
+                 logger.info(f"QA日志已添加到会话，ID: {qa_log.id}")
+                 
+             except Exception as e:
+                 logger.error(f"记录问答日志失败: {e}")
+                 qa_log = None
+                 # 不在这里处理回滚，让API层统一处理事务
              
              # 创建响应
              response = self.create_answer_response(
@@ -583,108 +669,7 @@ class QAService:
              logger.error(f"❌ 统一检索问答失败: {e} (耗时: {processing_time:.2f}秒)")
              return self.create_error_response(f"统一检索问答失败: {str(e)}")
     
-    def ask_question_with_routing(
-        self,
-        db: Session,
-        question: str,
-        user_id: Optional[int] = None,
-        session_id: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        active_kb_ids: Optional[List[uuid.UUID]] = None
-    ) -> AnswerResponse:
-        """
-        使用多知识库路由回答问题
-        """
-        try:
-            if start_time is None:
-                start_time = datetime.now(timezone.utc)
-            
-            logger.info("🚀 开始多知识库路由问答")
-            
-            # 使用多知识库路由服务
-            # 注意：MultiRetrievalService 暂不支持 active_kb_ids 参数
-            if active_kb_ids:
-                logger.warning(f"⚠️ MultiRetrievalService 暂不支持知识库过滤，忽略 active_kb_ids: {active_kb_ids}")
-            
-            routing_result = self.multi_retrieval_service.ask_question_with_routing(
-                question=question,
-                session_id=session_id,
-                db=db
-            )
-            
-            # 提取结果
-            answer = routing_result.get("answer", "")
-            source_documents_raw = routing_result.get("source_documents", [])
-            route_info = routing_result.get("route_info", {})
-            confidence = routing_result.get("confidence", 0.7)
-            
-            logger.info(f"🎯 路由选择: {route_info.get('selected_retriever', '未知')}")
-            logger.info(f"📊 置信度: {confidence}")
-            logger.info(f"📄 找到 {len(source_documents_raw)} 个源文档")
-            
-            # 转换源文档格式
-            source_documents = []
-            for doc_info in source_documents_raw:
-                source_doc = SourceDocument(
-                    content=doc_info.get("content", ""),
-                    source=doc_info.get("source", "未知来源"),
-                    title=doc_info.get("title", "未知标题"),
-                    metadata=doc_info.get("metadata", {})
-                )
-                source_documents.append(source_doc)
-            
-            # 计算处理时间
-            processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
-            # 缓存答案
-            self.cache_answer(question, None, answer, source_documents)
-            
-            # 记录问答日志（包含路由信息）
-            qa_log = self.log_qa_interaction(
-                db=db,
-                question=question,
-                answer=answer,
-                source_documents=source_documents,
-                user_id=user_id,
-                session_id=session_id,
-                processing_time=processing_time
-            )
-            
-            # 如果有QA日志，添加路由信息到元数据
-            if qa_log:
-                try:
-                    metadata = json.loads(qa_log.metadata or "{}")
-                    metadata["route_info"] = route_info
-                    qa_log.metadata = json.dumps(metadata)
-                    db.commit()
-                except Exception as e:
-                    logger.warning(f"保存路由信息到QA日志失败: {e}")
-            
-            # 创建响应
-            response = AnswerResponse(
-                question=question,
-                answer=answer,
-                source_documents=source_documents,
-                confidence=confidence,
-                processing_time=processing_time,
-                from_cache=False,
-                session_id=session_id,
-                metadata={
-                    "route_info": route_info,
-                    "retrieval_method": "multi_retrieval_routing",
-                    "category": (route_info.get("classification", {}) or {}).get("category") or route_info.get("selected_retriever")
-                },
-                qa_log_id=qa_log.id if qa_log else None
-            )
-            
-            logger.info(f"✅ 多知识库路由问答完成，总处理时间: {processing_time:.2f}秒")
-            return response
-            
-        except Exception as e:
-            processing_time = (datetime.now(timezone.utc) - start_time).total_seconds() if start_time else 0
-            logger.error(f"❌ 多知识库路由问答失败: {e} (耗时: {processing_time:.2f}秒)")
-            return self.create_error_response(f"多知识库路由问答失败: {str(e)}")
-    
+
     def enhance_query(self, question: str, category: Optional[str] = None) -> str:
         """增强查询"""
         enhanced_query = question
@@ -946,14 +931,19 @@ class QAService:
             )
             
             db.add(qa_log)
-            db.commit()
-            db.refresh(qa_log)
+            logger.info("QA日志已添加到会话，准备提交")
             
+            db.commit()
+            logger.info("QA日志已提交到数据库")
+            
+            db.refresh(qa_log)
             logger.info(f"问答日志记录成功: {qa_log.id}")
             return qa_log
             
         except Exception as e:
             logger.error(f"记录问答日志失败: {e}")
+            import traceback
+            logger.error(f"详细错误信息: {traceback.format_exc()}")
             db.rollback()
             return None
     

@@ -134,10 +134,10 @@ class VectorService:
         self.embedding_mode = settings.embedding_mode
         
         if self.embedding_mode == "api":
-            # 使用 Qwen3 Embedding API
+            # 使用 SiliconFlow Embedding API
             import requests
             # 从环境变量读取API密钥
-            self.api_key = os.getenv('DASHSCOPE_API_KEY', settings.embedding_api_key)
+            self.api_key = os.getenv('EMBEDDING_API_KEY', settings.embedding_api_key)
             self.api_base_url = settings.embedding_base_url
             self.api_headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -305,7 +305,7 @@ class VectorService:
             if new_mode == "api":
                 import requests
                 # 从环境变量读取API密钥
-                self.api_key = os.getenv('DASHSCOPE_API_KEY', settings.embedding_api_key)
+                self.api_key = os.getenv('EMBEDDING_API_KEY', settings.embedding_api_key)
                 self.api_base_url = settings.embedding_base_url
                 self.api_headers = {
                     "Authorization": f"Bearer {self.api_key}",
