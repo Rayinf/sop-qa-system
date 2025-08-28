@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = 2000
     
     # Kimi API Configuration
-    kimi_api_key: Optional[str] = "sk-oGiE4vyB6H21XOdVpsPiW1FdM3TnR0ERvCFqbKq3pK2Gc6sR"
+    kimi_api_key: Optional[str] = "YOUR_KEY"
     kimi_base_url: str = "https://api.moonshot.cn/v1"
     kimi_model: str = "kimi-k2-0711-preview"
     kimi_temperature: float = 0.6
